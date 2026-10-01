@@ -1,0 +1,3 @@
+import SwiftUI
+import AppKit
+@main struct BlueprintCreatorApp:App{@NSApplicationDelegateAdaptor(AppDelegate.self)var delegate;@StateObject var m=AppModel();var body:some Scene{WindowGroup{ContentView().environmentObject(m).frame(minWidth:1040,minHeight:680)}.commands{CommandGroup(replacing:.appInfo){Button("About Blueprint Conversion Utility"){m.showAbout=true}};CommandGroup(replacing:.appSettings){Button("Connections..."){m.showConnections=true}.keyboardShortcut(",")};CommandGroup(replacing:.help){Button("Knowledge Base"){m.showKB=true}};CommandGroup(replacing:.newItem){EmptyView()};CommandMenu("Blueprint"){Button("Refresh Workspace"){Task{await m.load()}}.keyboardShortcut("r")}}}}
