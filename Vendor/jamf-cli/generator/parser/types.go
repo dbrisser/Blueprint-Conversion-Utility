@@ -1,0 +1,353 @@
+// Copyright 2026, Jamf Software LLC
+
+package parser
+
+import "strings"
+
+// LookupField represents an alternate identifier that can be used to resolve a
+// resource ID instead of the primary name field (e.g. serial number for computers).
+type LookupField struct {
+	Flag      string // CLI flag name (e.g. "serial")
+	RSQLField string // RSQL filter field path (e.g. "hardware.serialNumber")
+	Desc      string // Flag description shown in --help
+	Section   string // Optional inventory section to request so the RSQLField is present in the response (e.g. "HARDWARE"); empty when the field is in the default section.
+}
+
+// FileField declares a resource field whose value is sourced from a local file
+// via a dedicated CLI flag on create/update/apply/patch. The file contents are
+// injected into the request body pre-marshal, overwriting any value the caller
+// may have supplied in the body. Encoding, companion-field population, and
+// name fallback are all driven per entry.
+type FileField struct {
+	Flag              string // CLI flag name, e.g. "script-file"
+	Field             string // Request-body property that receives the file contents, e.g. "scriptContents"
+	Encoding          string // "raw" (string) or "base64"
+	Desc              string // Flag description shown in --help
+	CompanionField    string // Optional: body property auto-populated with filepath.Base(path) when absent (e.g. "tokenFileName" for DEP)
+	NameFallback      string // "none" | "keep-ext" | "strip-ext" — when the body lacks a name, derive one from the filename
+	NameFlag          bool   // When true, emit a --name flag on create/apply/upload-style ops that sets the body's name field (for tokens whose filename makes a poor record name).
+	RenameAfterUpload bool   // When true, and --name is supplied on an upload-style op whose request schema rejects a name field (e.g. DEP /upload-token → DeviceEnrollmentTokenDto has only encodedToken + tokenFileName), the generator emits a follow-up GET+PUT on the standard update path to apply the name.
+}
+
+// TableColumn defines a preferred column for list table output.
+type TableColumn struct {
+	Field string // JSON field path (e.g., "general.name") — may use dot-notation for nested fields
+	Label string // Display label (e.g., "name") — used as the column header
+}
+
+// Resource represents a parsed API resource (e.g., buildings, computers)
+type Resource struct {
+	Name              string // e.g., "buildings"
+	NameSingular      string // e.g., "building"
+	GoName            string // e.g., "Buildings"
+	Description       string
+	Operations        []*Operation
+	Schemas           map[string]*Schema
+	NameField         string        // Filter field for name lookups (default "name", some use "displayName")
+	IDField           string        // Response field for ID extraction in name resolution (default "id", some use "templateId", "groupId", etc.)
+	IsSingleton       bool          // True for settings-style resources: single object, GET+PUT, no {id} in any path
+	LookupFields      []LookupField // Alternate identifier fields for patch-by-name / delete-by-name (e.g. serial number)
+	NameLookupPath    string        // Override list path for name resolution (when the standard list endpoint ignores RSQL)
+	NameLookupIDField string        // Override ID field extracted from NameLookupPath response (when it differs from IDField)
+	HasVersionLock    bool          // True when PUT/POST request body includes versionLock (optimistic locking for prestages)
+	GroupsClassicPath string        // When set, delete gets --group resolved via Classic API group list (e.g. "computergroups")
+	FileFields        []FileField   // File-sourced request-body fields (attached via --script-file, --token-file, etc.)
+	TableColumns      []TableColumn // Preferred columns for list table output (when set, overrides generic column selection)
+	DefaultSections   []string      // Default --section values for list (when set, fetches these sections for table output)
+	GetDetailPath     string        // When set, "get" uses this path by default (returns all sections). If the get op has a section param, --section overrides back to the original path.
+	UpdateTokenOp     *Operation    // Optional: auxiliary PUT endpoint for file-field payloads (e.g. PUT /{id}/upload-token). When set, update/apply route the file-field flag to this endpoint instead of the main update body, and no standalone subcommand is emitted for it.
+
+	// Root is the literal (non-parameter, non-version) path segments that
+	// identify this resource — the group's own root, or a sub-resource's
+	// sub-path.
+	//
+	// Carried rather than re-derived, because every attempt to infer it has
+	// been wrong in a different way. "The shallowest no-param path" answers
+	// `/inventory-preload/csv` for a resource whose declared root
+	// `/v1/inventory-preload` is dropped, and `/mdm/commands` for `pro mdm`;
+	// "the path every other sits beneath" answers nothing for `enrollment`,
+	// whose group holds `/v1/adue-session-token-settings`. Three passes in
+	// parser.go took a root parameter for exactly this reason; a field is what
+	// stops the next consumer inventing a fourth heuristic.
+	Root []string
+	// Parent is the name of the resource this one nests under, empty for a
+	// top-level resource. See subresource.go: an independently-writable
+	// sub-path becomes a resource of its own so its verbs stop reading as the
+	// parent's.
+	Parent string
+	// SubResources are the nested sub-resources, each a Resource in its own
+	// right so every per-resource pass applies to it unchanged — singleton
+	// detection and the naming passes are exactly what has to run again over a
+	// sub-resource's own root, and reusing them is what makes `cert get`
+	// rather than `cert list` fall out.
+	SubResources []*Resource
+}
+
+// QualifiedName is the resource's name prefixed by its parent's, the key a
+// resource-name-keyed override table has to use to reach a sub-resource.
+//
+// Separate from Name because Name is the cobra token: a sub-resource's Use is
+// `cert`, and its identity across the generator is `sso-settings cert`.
+func (r *Resource) QualifiedName() string {
+	if r.Parent == "" {
+		return r.Name
+	}
+	return r.Parent + " " + r.Name
+}
+
+// CmdPath is the invocation path beneath `pro`, which for every resource is its
+// qualified name. Named separately because that is what it means at the call
+// sites that build --help examples.
+func (r *Resource) CmdPath() string { return r.QualifiedName() }
+
+// FileBase is the stem of the generated file, distinct from Name because two
+// sub-resources legitimately share a terminal segment (`settings` appears three
+// times) and one file per resource is what the stale-file prune assumes.
+func (r *Resource) FileBase() string {
+	return strings.ReplaceAll(r.QualifiedName(), " ", "-")
+}
+
+// AllOperations returns this resource's operations and every sub-resource's,
+// which is what a consumer keyed on the endpoint rather than on the command
+// needs.
+//
+// Every such consumer has to use it, and the failure mode when one does not is
+// silent: gateway stamping reads Operations, and an unstamped operation is not
+// refused pre-flight, so a nested command on a withdrawn endpoint would go out
+// to the bare 403 the refusal exists to pre-empt.
+func (r *Resource) AllOperations() []*Operation {
+	ops := append([]*Operation(nil), r.Operations...)
+	for _, sub := range r.SubResources {
+		ops = append(ops, sub.AllOperations()...)
+	}
+	return ops
+}
+
+// Flatten returns this resource and every sub-resource, depth first, for the
+// passes that key on a resource name.
+func (r *Resource) Flatten() []*Resource {
+	out := []*Resource{r}
+	for _, sub := range r.SubResources {
+		out = append(out, sub.Flatten()...)
+	}
+	return out
+}
+
+// FlattenResources is Flatten over a slice.
+func FlattenResources(resources []*Resource) []*Resource {
+	var out []*Resource
+	for _, r := range resources {
+		out = append(out, r.Flatten()...)
+	}
+	return out
+}
+
+// Operation represents an API operation (endpoint)
+type Operation struct {
+	Name          string // e.g., "list", "get", "create"
+	Method        string // HTTP method
+	Path          string // API path
+	Summary       string
+	Description   string
+	Parameters    []*Parameter
+	RequestBody   *RequestBody
+	Responses     map[string]*Response
+	IsAction      bool     // x-action: true
+	IsDestructive bool     // Requires confirmation (delete, erase, etc.)
+	IsList        bool     // List operation with pagination support
+	IsPaginated   bool     // Any GET with pagination params (broader than IsList); gates --all/--limit auto-pagination
+	APIVersion    string   // v1, v2, preview, etc.
+	Privileges    []string // x-required-privileges
+	// FallbackPaths holds lower-version base paths for GET/DELETE ops where the
+	// same endpoint exists at multiple API versions. Listed in descending version
+	// order so the runtime tries the newest fallback first.
+	FallbackPaths []string
+	// BulkActionPath is set on a per-{id} x-action when the spec also declares a
+	// sibling collection-level action of the same name (e.g. the per-deployment
+	// installation-retry and the no-{id} bulk installation-retry). It holds the
+	// bulk endpoint's path; the generator surfaces it as an --all flag that hits
+	// the collection-level endpoint in a single call instead of the {id} one.
+	BulkActionPath string
+	// StatusResults lists non-2xx statuses this operation documents as results
+	// rather than failures (see documentedStatusResults in parser.go). The
+	// generated command carries them through registry.WithAllowedStatuses and
+	// renders their body instead of letting the client map them to an
+	// exit-code error. Empty for all but a handful of check-style endpoints.
+	StatusResults []StatusResult
+	// NoContentDescription is the 204 response's description, set only when
+	// StatusResults is non-empty — a 204 has no body, so the generated command
+	// synthesizes one from this so the success case is machine-readable too.
+	NoContentDescription string
+	// ExpectedStatus is the success status the server actually answers, from
+	// the published spec's x-jamf-expected-status extension. Non-zero only
+	// where the SDK found the declared status wrong by probing the wire; it
+	// overrides the status derived from the responses map.
+	ExpectedStatus int
+	// GatewayLevel, GatewayBasis and GatewayDetail record whether the Jamf
+	// Platform gateway exposes this operation, from specs/gateway/coverage.json.
+	// Empty when the gateway serves it or when no manifest was available. Basis
+	// is the evidence ("probe" or "unpublished") and selects the wording of the
+	// refusal, not whether there is one. See generator/gateway.
+	GatewayLevel  string
+	GatewayBasis  string
+	GatewayDetail string
+	// GatewayPrivileges are the Jamf Account capability permissions the gateway
+	// requires for this operation, also from specs/gateway/coverage.json. A
+	// different vocabulary from Privileges above, not a translation of it: that
+	// field holds the Jamf Pro API-role privilege names an instance enforces,
+	// and the GA consolidation folded several of those into one capability. Both
+	// are surfaced in the commands catalog so an integration can be sized
+	// without provoking a 403.
+	//
+	// Empty for an unserved operation — the published spec declares no scope for
+	// what it does not publish — and for the 44 unauthenticated Jamf Pro
+	// endpoints.
+	GatewayPrivileges []string
+	// ScopeTypes are the Jamf Platform API scope levels the published spec
+	// declares this operation's credential must be created at — some subset of
+	// "organization", "environment" and "tenant", from the spec-root
+	// x-scope-types extension. Platform operations only; empty for a Jamf Pro
+	// or Classic one, whose scope is a property of the gateway route rather
+	// than of the endpoint.
+	//
+	// Per-operation although the extension is per-spec, because two specs can
+	// merge into one resource and disagree: uem-connect and the enrollment API
+	// both tag a resource "activation-profiles", and a resource-level field
+	// would have had to pick one of their answers.
+	//
+	// This is what the SPEC claims, which is currently stricter than what the
+	// gateway serves — build v2082 moved six Platform specs to
+	// environment-only while a tenant credential still reaches at least
+	// platform-devices and platform-device-groups (probed 2026-09-05). So it
+	// is reported and hinted with, never used to refuse a command.
+	ScopeTypes []string
+
+	// Preview is true when the published spec marks this operation as a preview
+	// endpoint, from the per-operation x-preview extension.
+	//
+	// Structured rather than read off the prose, although the prose says it too:
+	// upstream renders a "Preview - " prefix into the summary and a markdown
+	// admonition into the description, and both are wording nobody here
+	// controls. The AI Governance spec is the only one carrying it as of SDK
+	// v1.1.0, where all twelve operations are preview with a stated GA date.
+	Preview bool
+}
+
+// StatusResult is a non-2xx response the API documents as a meaningful outcome
+// of the operation rather than a failure of it.
+type StatusResult struct {
+	Code        int
+	Description string
+}
+
+// Parameter represents a query/path parameter
+type Parameter struct {
+	Name        string
+	In          string // "query", "path"
+	Description string
+	Required    bool
+	Type        string
+	Default     any
+	IsArray     bool
+	// Maximum is the spec-declared upper bound for a numeric parameter, 0 when
+	// the spec declares none. Carried for the pagination ceiling: a page-size
+	// param that names its own maximum is the only per-endpoint evidence of the
+	// cap that does not need a wire probe, and /v1/users is the one Jamf Pro
+	// endpoint that declares one (1000, against the 2000 every other paginated
+	// endpoint clamps to silently). See MaxPageSize.
+	Maximum int
+}
+
+// RequestBody represents a request body
+type RequestBody struct {
+	Description  string
+	Required     bool
+	Schema       *Schema
+	IsMultipart  bool   // true when content type is multipart/form-data
+	IsMergePatch bool   // true when content type is application/merge-patch+json
+	FileField    string // schema property that holds the binary file (e.g. "file")
+}
+
+// Response represents an API response
+type Response struct {
+	StatusCode  string
+	Description string
+	Schema      *Schema
+	IsBinary    bool // true for image/* content types, text/csv, or format:binary schemas
+}
+
+// Schema represents a JSON schema
+type Schema struct {
+	Name       string
+	Type       string
+	Properties map[string]*Property
+	Required   []string
+	// Enum holds the values this schema is restricted to, when the schema is
+	// itself a constrained scalar rather than an object. For an array property
+	// that is where the constraint lives — the enum sits on the element schema,
+	// not on the array — so Items.Enum is how an "array of one of these" is
+	// discovered.
+	Enum []string
+	// Items is the element schema when Type is "array", for a schema that is
+	// itself an array rather than an object. Set only for arrays, and only as
+	// deep as parseSchema's recursion cap allows.
+	//
+	// Needed because a request body may be a bare array — the DNS whole-list
+	// replaces are — and without this such a body has no properties and no
+	// element shape, so a scaffold for it can only be "[]".
+	Items *Schema
+	// Variants names the alternative shapes of a discriminated union request
+	// body (a bare oneOf/anyOf), in spec order, and Discriminator the property
+	// that selects between them. Both empty for an ordinary schema.
+	//
+	// The schema itself carries the FIRST variant's properties, so every
+	// consumer — the scaffold, --set completion, the enum help — keeps working
+	// on a concrete shape rather than having to understand unions. Variants
+	// exists so the generated help can say that other shapes are legal, which is
+	// the part a caller cannot otherwise discover: uem-connectors create is one
+	// of these, and before this the whole body parsed to nothing, taking
+	// --scaffold and every "Allowed values:" line with it.
+	Variants []string
+	// Discriminator is the property whose value selects the variant.
+	Discriminator string
+}
+
+// Property represents a schema property
+type Property struct {
+	Name        string
+	Type        string
+	Description string
+	Example     any
+	Nullable    bool
+	ReadOnly    bool
+	WriteOnly   bool    // true when the field is accepted in requests but never returned in responses (e.g. passwords, secrets)
+	SchemaRef   string  // name of the referenced component schema for object/array types (e.g. "ComputerGeneralUpdate")
+	Nested      *Schema // resolved nested schema for object types (may be nil)
+	// VariantOnly marks a property that only a non-scaffolded variant of a
+	// discriminated-union body declares. It carries enum values for the help and
+	// nothing else — no type, no example — so a scaffold must not render it: it
+	// is not a field of the body the scaffold shows.
+	VariantOnly bool
+	// Enum holds the values this property is restricted to, in the order the
+	// spec lists them, rendered as literals. Empty for unconstrained
+	// properties. Not string-only: an integer enum is carried the same way,
+	// because a required field constrained to five specific durations is
+	// exactly the case help has to name.
+	//
+	// Carried so generated help can name the choices. A scaffold renders an
+	// enum field as an empty string like any other, which tells a caller
+	// nothing about what it accepts — and Security Cloud's ZTNA gateway vendor
+	// is a case-sensitive eleven-value enum whose rejection is a 400 that does
+	// not name the offending field, so guessing is expensive.
+	Enum []string
+	// Items is the element schema for an array-typed property, so a scaffold can
+	// show one element instead of a bare "[]". Nil when the element is a scalar
+	// or the spec declares no items.
+	//
+	// This is the array counterpart of Nested, and it is populated under a
+	// recursion cap that Nested never needed: an object property whose own
+	// properties are empty ends the walk, but an array property can name its
+	// parent's schema as its element type (a tree with a children[] of itself),
+	// which would recurse forever.
+	Items *Schema
+}

@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Explore all jamf-cli commands — unified CLI for Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud">
+  <meta name="robots" content="index, follow, max-snippet:-1, max-image-preview:large">
+  <title>jamf-cli — Your fleet, one command away</title>
+  <link rel="canonical" href="https://jamf-concepts.github.io/jamf-cli/">
+  <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#141920" media="(prefers-color-scheme: dark)">
+  <!-- Apply the saved manual theme before first paint (prevents a flash of
+       the wrong theme) and pin the browser-chrome color to match. -->
+  <script>
+    // The one copy of the pair declared on the two theme-color metas above.
+    // syncThemeColor() reads it back to restore them for system mode, and
+    // cannot read the metas themselves because this script overwrites them.
+    window.THEME_COLORS = { light: '#ffffff', dark: '#141920' };
+    (function () {
+      try {
+        var t = localStorage.getItem('theme');
+        if (t !== 'dark' && t !== 'light') return;
+        document.documentElement.setAttribute('data-theme', t);
+        var c = window.THEME_COLORS[t];
+        var metas = document.querySelectorAll('meta[name="theme-color"]');
+        for (var i = 0; i < metas.length; i++) metas[i].setAttribute('content', c);
+      } catch (e) { /* storage blocked — fall back to system theme */ }
+    })();
+  </script>
+  <link rel="icon" type="image/svg+xml" href="img/favicon.svg">
+  <!-- Crawlable artifacts for AI agents and search engines that don't run JS -->
+  <link rel="alternate" type="application/json" title="jamf-cli command index (JSON)" href="commands.json">
+  <link rel="alternate" type="text/markdown" title="jamf-cli for AI agents (llms.txt)" href="llms.txt">
+  <link rel="alternate" type="text/markdown" title="jamf-cli full command reference (markdown)" href="llms-full.txt">
+  <!-- Open Graph / Social -->
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="jamf-cli — Your fleet, one command away">
+  <meta property="og:description" content="Unified CLI for Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud. __COMMAND_COUNT__ commands. Full API coverage. Zero clicks.">
+  <meta property="og:url" content="https://jamf-concepts.github.io/jamf-cli/">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="jamf-cli — Your fleet, one command away">
+  <meta name="twitter:description" content="Unified CLI for Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud. __COMMAND_COUNT__ commands. Full API coverage. Zero clicks.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,700&family=Noto+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- Without scripts the catalog never loads, so the loading line would
+       stand forever above the noscript block that explains why. -->
+  <noscript><style>#catalog-loading { display: none; }</style></noscript>
+  <!-- Schema.org SoftwareApplication — eligibility for Google rich results
+       and structured data for AI/search consumers.
+       __VERSION__ and __BUILD_DATE__ are substituted with the release version
+       and deploy date by the "Stamp build freshness" step in deploy-site.yaml.
+       They stay as literal placeholders in the repo (valid JSON strings). -->
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "jamf-cli",
+    "alternateName": "Jamf CLI",
+    "description": "Unified command-line interface for Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud. Open source.",
+    "applicationCategory": "DeveloperApplication",
+    "applicationSubCategory": "Command Line Interface",
+    "operatingSystem": "macOS, Linux, Windows",
+    "softwareVersion": "__VERSION__",
+    "dateModified": "__BUILD_DATE__",
+    "url": "https://jamf-concepts.github.io/jamf-cli/",
+    "downloadUrl": "https://github.com/Jamf-Concepts/jamf-cli/releases",
+    "softwareHelp": "https://github.com/Jamf-Concepts/jamf-cli/wiki",
+    "codeRepository": "https://github.com/Jamf-Concepts/jamf-cli",
+    "programmingLanguage": "Go",
+    "license": "https://github.com/Jamf-Concepts/jamf-cli/blob/main/LICENSE",
+    "isAccessibleForFree": true,
+    "offers": {
+      "@type": "Offer",
+      "price": "0",
+      "priceCurrency": "USD"
+    },
+    "author": {
+      "@type": "Organization",
+      "name": "Jamf",
+      "url": "https://www.jamf.com"
+    },
+    "publisher": {
+      "@type": "Organization",
+      "name": "Jamf Concepts",
+      "url": "https://concepts.jamf.com"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ===== Nav ===== -->
+  <nav>
+    <a href="#" class="nav-brand">
+      <svg class="nav-logo" viewBox="0 0 43 43" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M33.63 6.96c-5.52 0-8.78 2.33-10.27 7.31l-3.84 11.88c-1.41 3.91-3.68 5.52-7.82 5.52H2.19A2.19 2.19 0 000 33.87v6.06c0 1.16.94 2.1 2.1 2.1h38.57a2.19 2.19 0 002.19-2.19V9.08c0-1.17-.95-2.12-2.11-2.12h-7.12z" fill="currentColor"/><path fill-rule="evenodd" clip-rule="evenodd" d="M2.35 0A2.35 2.35 0 000 2.35v16.22a2.29 2.29 0 002.29 2.29h8.17c3.74 0 8.88-.77 10.29-7.41l2.23-10.6A2.35 2.35 0 0020.68 0H2.35z" fill="currentColor"/></svg>
+      jamf-cli
+    </a>
+    <a class="version-badge" id="version-badge" href="https://github.com/Jamf-Concepts/jamf-cli/releases" target="_blank" rel="noopener" title="Release notes on GitHub"></a>
+    <button class="hamburger" aria-label="Toggle navigation" aria-expanded="false" type="button">
+      <span></span><span></span><span></span>
+    </button>
+    <div class="nav-right">
+      <button class="nav-search" type="button" aria-label="Search commands (Command K)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <span class="nav-search-label">Search <span id="nav-command-count">&mdash;</span> commands</span>
+        <kbd>&#8984;K</kbd>
+      </button>
+      <ul class="nav-links">
+        <li><a href="#commands">Commands</a></li>
+        <li><a href="#quickstart">Quick start</a></li>
+        <li><a href="#install">Install</a></li>
+        <li><a href="https://github.com/Jamf-Concepts/jamf-cli/wiki" target="_blank" rel="noopener">Wiki</a></li>
+        <li class="nav-sep" aria-hidden="true"></li>
+        <li><a href="https://github.com/Jamf-Concepts/jamf-cli" target="_blank" rel="noopener">GitHub</a></li>
+      </ul>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Theme: system" title="Theme: system. Click for light.">
+        <svg class="theme-icon theme-icon-system" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="18" x2="12" y2="21"/></svg>
+        <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+        <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+    </div>
+  </nav>
+
+  <!-- ===== Hero ===== -->
+  <section id="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">jamf-cli &middot; open source</p>
+      <h1>Your fleet, <em>one command</em> away.</h1>
+      <p class="subtitle">
+        One binary for Jamf Pro, Jamf Protect, Jamf School, Jamf Security Cloud, and the Platform API.
+        <span id="command-count">&mdash;</span> commands with structured output, stable exit codes, and no credentials on the command line.
+      </p>
+      <div class="hero-actions">
+        <a href="#commands" class="btn btn-dark">Browse the commands</a>
+        <a href="#install" class="btn btn-secondary">Install</a>
+      </div>
+      <div class="code-block hero-install">
+        <span class="code-prompt" aria-hidden="true">$</span>
+        <code>brew install Jamf-Concepts/tap/jamf-cli</code>
+        <button class="btn btn-primary btn-small copy-btn" aria-label="Copy install command" data-copy="brew install Jamf-Concepts/tap/jamf-cli" type="button"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy</button>
+      </div>
+      <div class="product-strip" aria-label="Commands per product">
+        <a href="#commands" class="tag" data-product="pro" data-tab="pro">Jamf Pro <span class="tag-count" id="stat-pro">&mdash;</span></a>
+        <a href="#commands" class="tag" data-product="protect" data-tab="protect">Jamf Protect <span class="tag-count" id="stat-protect">&mdash;</span></a>
+        <a href="#commands" class="tag" data-product="school" data-tab="school">Jamf School <span class="tag-count" id="stat-school">&mdash;</span></a>
+        <a href="#commands" class="tag" data-product="security" data-tab="security">Security Cloud <span class="tag-count" id="stat-security">&mdash;</span></a>
+        <a href="#commands" class="tag" data-product="platform" data-tab="platform" data-tip="Includes Pro commands routed through the Platform Gateway. Counts overlap with Jamf Pro.">Platform API <span class="tag-count" id="stat-platform">&mdash;</span><!--
+          The caveat rides inside the link as hidden text rather than as an
+          aria-label, so the accessible name still carries the count the
+          other five tags expose through their own text. An aria-label would
+          replace the whole name and drop the number.
+        --><span class="sr-only">. Includes Pro commands routed through the Platform Gateway, so counts overlap with Jamf Pro.</span></a>
+        <a href="#commands" class="tag" data-product="core" data-tab="core">Core <span class="tag-count" id="stat-core">&mdash;</span></a>
+      </div>
+    </div>
+
+    <div class="example-frame hero-terminal">
+      <div class="example-tabs">
+        <span class="example-tab">Terminal</span>
+      </div>
+      <div id="terminal">
+        <div id="terminal-output"></div>
+        <div class="terminal-cursor"></div>
+      </div>
+      <div class="example-footer">
+        <button class="btn btn-primary copy-btn" type="button" data-copy="jamf-cli pro overview" aria-label="Copy the last command"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy command</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== Facts band ===== -->
+  <section id="facts" aria-label="What you get">
+    <div class="fact">
+      <h2 class="h5">Structured output</h2>
+      <p>Every command prints <code>json</code>, <code>yaml</code>, <code>csv</code>, <code>table</code>, <code>plain</code>, or a single field.</p>
+    </div>
+    <div class="fact">
+      <h2 class="h5">Credentials stay off the command line</h2>
+      <p>OAuth2 client credentials, bearer token, or Platform Gateway. Secrets live in the keychain, env vars, or files. Never in argv.</p>
+    </div>
+    <div class="fact">
+      <h2 class="h5">Built for scripts and agents</h2>
+      <p>Stable exit codes, <code>--no-input</code>, <code>--quiet</code>, an <a href="llms.txt">llms.txt</a>, and a <a href="commands.json">JSON command index</a>.</p>
+    </div>
+  </section>
+
+  <!-- ===== Quick start ===== -->
+  <section id="quickstart">
+    <div class="section-head">
+      <h2>Up and running in three commands</h2>
+      <p id="install">Homebrew, <code>go install</code>, or a <a href="https://github.com/Jamf-Concepts/jamf-cli/releases" target="_blank" rel="noopener">binary from GitHub Releases</a> for macOS, Linux, and Windows.</p>
+    </div>
+    <div class="steps">
+      <div class="card step">
+        <div class="step-head"><span class="step-num">1</span><h3>Install</h3></div>
+        <div class="code-block">
+          <code>brew install Jamf-Concepts/tap/jamf-cli</code>
+          <button class="btn btn-primary btn-small copy-btn" type="button" data-copy="brew install Jamf-Concepts/tap/jamf-cli" aria-label="Copy"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy</button>
+        </div>
+        <p>One binary. Shell completion for bash, zsh, fish, and PowerShell.</p>
+        <details class="alt-install">
+          <summary>Other install options</summary>
+          <div class="code-block"><code>go install github.com/Jamf-Concepts/jamf-cli/cmd/jamf-cli@latest</code><button class="btn btn-primary btn-small copy-btn" type="button" data-copy="go install github.com/Jamf-Concepts/jamf-cli/cmd/jamf-cli@latest" aria-label="Copy"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy</button></div>
+        </details>
+      </div>
+      <div class="card step">
+        <div class="step-head"><span class="step-num">2</span><h3>Connect</h3></div>
+        <div class="code-block">
+          <code>jamf-cli <span class="tok-pro">pro</span> setup <span class="tok-flag">--url</span> https://jamf.company.com</code>
+          <button class="btn btn-primary btn-small copy-btn" type="button" data-copy="jamf-cli pro setup --url https://jamf.company.com" aria-label="Copy"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy</button>
+        </div>
+        <p>Prompts for credentials and saves a profile to the keychain. Nothing lands in shell history.</p>
+      </div>
+      <div class="card step">
+        <div class="step-head"><span class="step-num">3</span><h3>Run</h3></div>
+        <div class="code-block">
+          <code>jamf-cli <span class="tok-pro">pro</span> overview <span class="tok-flag">-o json</span></code>
+          <button class="btn btn-primary btn-small copy-btn" type="button" data-copy="jamf-cli pro overview -o json" aria-label="Copy"><span class="copy-icons"><svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg></span> Copy</button>
+        </div>
+        <p>Add <code>-p staging</code> to target another profile. Pipe the JSON anywhere.</p>
+      </div>
+    </div>
+    <div class="alert alert-info" role="note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+      <p><strong>Running in CI?</strong> Set <code>JAMF_URL</code>, <code>JAMF_CLIENT_ID</code>, and <code>JAMF_CLIENT_SECRET</code> and skip setup. Add <code>JAMF_CLI_ARGS='--quiet --no-input'</code> for unattended runs.</p>
+    </div>
+  </section>
+
+  <!-- ===== Commands Catalog ===== -->
+  <section id="commands">
+    <div class="section-head">
+      <h2>Commands</h2>
+      <p><span id="commands-total">&mdash;</span> commands, regenerated from the binary on every merge to main.</p>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Filter by product">
+      <button class="tab active" id="tab-all" role="tab" aria-selected="true" aria-controls="catalog" data-filter="all" type="button">All</button>
+      <button class="tab" id="tab-platform" role="tab" aria-selected="false" aria-controls="catalog" data-filter="platform" type="button">Platform API</button>
+      <button class="tab" id="tab-pro" role="tab" aria-selected="false" aria-controls="catalog" data-filter="pro" type="button">Jamf Pro</button>
+      <button class="tab" id="tab-protect" role="tab" aria-selected="false" aria-controls="catalog" data-filter="protect" type="button">Jamf Protect</button>
+      <button class="tab" id="tab-school" role="tab" aria-selected="false" aria-controls="catalog" data-filter="school" type="button">Jamf School</button>
+      <button class="tab" id="tab-security" role="tab" aria-selected="false" aria-controls="catalog" data-filter="security" type="button">Security Cloud</button>
+      <button class="tab" id="tab-core" role="tab" aria-selected="false" aria-controls="catalog" data-filter="core" type="button">Core</button>
+    </div>
+    <div class="catalog-layout">
+      <nav class="group-nav" id="group-nav" aria-label="Command groups"></nav>
+      <div class="catalog-main">
+        <label class="group-select-wrap">
+          <span class="sr-only">Command group</span>
+          <select id="group-select" aria-label="Command group"></select>
+        </label>
+        <div class="catalog-controls">
+          <div class="search-wrap">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="search" type="text" placeholder="Search commands (press / to focus)" aria-label="Search commands">
+            <button id="search-clear" class="search-clear" aria-label="Clear search" type="button">&times;</button>
+          </div>
+          <button id="toggle-all" class="btn btn-secondary" type="button" title="Expand or collapse every row">Expand all</button>
+          <button class="btn btn-secondary kbd-hint-btn" id="kbd-hint-btn" type="button" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts"><kbd>?</kbd></button>
+        </div>
+        <div id="catalog-loading">Loading commands...</div>
+        <!-- The table is replaced wholesale by a tab, a group choice, a
+             search or a deep link. A replaced region announces nothing on
+             its own, so catalog.js writes what is on screen here. -->
+        <p id="catalog-status" class="sr-only" role="status" aria-live="polite"></p>
+        <noscript>
+          <div class="noscript-fallback">
+            <p>The interactive command catalog needs JavaScript. The full command reference is also available in plain text:</p>
+            <ul>
+              <li><a href="llms-full.txt">llms-full.txt</a> — every command, description, flags, and aliases as markdown (auto-generated, AI-friendly)</li>
+              <li><a href="llms.txt">llms.txt</a> — high-level project index for AI agents</li>
+              <li><a href="commands.json">commands.json</a> — machine-readable JSON</li>
+              <li><a href="https://github.com/Jamf-Concepts/jamf-cli/wiki" target="_blank" rel="noopener">Wiki</a> — full documentation</li>
+            </ul>
+          </div>
+        </noscript>
+        <div id="catalog" role="tabpanel" aria-labelledby="tab-all" tabindex="0"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===== FAQ ===== -->
+  <!-- The visible Q&A below and the FAQPage JSON-LD that follows share the
+       same text on purpose (one is for humans, one for answer engines).
+       scripts/verify-site-output.sh fails if a FAQPage question is missing
+       from this visible section, so they can't silently drift apart. -->
+  <section id="faq">
+    <h2>Questions</h2>
+    <div class="faq-grid">
+      <div class="faq-item"><h3>What is jamf-cli?</h3><p>A single binary that manages Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud from the shell.</p></div>
+      <div class="faq-item"><h3>How are credentials handled?</h3><p>Interactive prompts, <code>JAMF_*</code> environment variables, or keychain-backed profiles. Never flags, never stdin.</p></div>
+      <div class="faq-item"><h3>Does it cover the Classic API?</h3><p>Yes. Classic and modern Jamf Pro APIs both live under <code>pro</code>. Every classic write takes <code>--from-file</code>.</p></div>
+      <div class="faq-item"><h3>Can AI agents use it?</h3><p>Yes. The site publishes <a href="llms.txt">llms.txt</a> and <a href="commands.json">commands.json</a>, and the binary has <code>mcp</code> and <code>agent-context</code> commands.</p></div>
+      <div class="faq-item"><h3>How current is this catalog?</h3><p>It is generated from the built binary on every merge to main. Commands added since the last release carry a New tag.</p></div>
+      <div class="faq-item"><h3>Is it free?</h3><p>Yes. Open source under the repository license, built and maintained by Jamf Concepts.</p></div>
+    </div>
+  </section>
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is jamf-cli?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "A single binary that manages Jamf Platform API, Jamf Pro, Jamf Protect, Jamf School, and Jamf Security Cloud from the shell."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How are credentials handled?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Interactive prompts, JAMF_* environment variables, or keychain-backed profiles. Never flags, never stdin."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does it cover the Classic API?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Classic and modern Jamf Pro APIs both live under pro. Every classic write takes --from-file."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can AI agents use it?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. The site publishes llms.txt and commands.json, and the binary has mcp and agent-context commands."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How current is this catalog?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "It is generated from the built binary on every merge to main. Commands added since the last release carry a New tag."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Is it free?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. Open source under the repository license, built and maintained by Jamf Concepts."
+        }
+      }
+    ]
+  }
+  </script>
+
+  <!-- ===== Keyboard Shortcuts Modal ===== -->
+  <div class="kbd-modal" id="kbd-modal" role="dialog" aria-modal="true" aria-labelledby="kbd-modal-title">
+    <div class="kbd-modal-content">
+      <div class="kbd-modal-header">
+        <h3 id="kbd-modal-title">Keyboard Shortcuts</h3>
+        <button class="kbd-modal-close" id="kbd-modal-close" type="button" aria-label="Close">&times;</button>
+      </div>
+      <div class="kbd-modal-body">
+        <div class="kbd-row"><kbd>⌘</kbd> <kbd>K</kbd> <span>Open command palette</span></div>
+        <div class="kbd-row"><kbd>/</kbd> <span>Focus search</span></div>
+        <div class="kbd-row"><kbd>Esc</kbd> <span>Clear search</span></div>
+        <div class="kbd-row"><kbd>&darr;</kbd> <kbd>j</kbd> <span>Next command</span></div>
+        <div class="kbd-row"><kbd>&uarr;</kbd> <kbd>k</kbd> <span>Previous command</span></div>
+        <div class="kbd-row"><kbd>Enter</kbd> <span>Expand command</span></div>
+        <div class="kbd-row"><kbd>c</kbd> <span>Copy command</span></div>
+        <div class="kbd-row"><kbd>?</kbd> <span>Toggle this guide</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Footer ===== -->
+  <footer>
+    <span class="footer-meta mono"><span id="footer-version"></span><span id="last-updated"></span></span>
+    <ul class="footer-links">
+      <li><a href="https://concepts.jamf.com" target="_blank" rel="noopener">Jamf Concepts</a></li>
+      <li><a href="https://github.com/Jamf-Concepts/jamf-cli" target="_blank" rel="noopener">GitHub</a></li>
+      <li><a href="https://github.com/Jamf-Concepts/jamf-cli/wiki" target="_blank" rel="noopener">Wiki</a></li>
+      <li><a href="https://github.com/Jamf-Concepts/jamf-cli/releases" target="_blank" rel="noopener">Releases</a></li>
+      <li><a href="llms.txt" class="mono">llms.txt</a></li>
+      <li><a href="commands.json" class="mono">commands.json</a></li>
+      <li>Press <kbd class="footer-kbd">?</kbd> for shortcuts</li>
+    </ul>
+  </footer>
+
+  <!-- ===== Back to Top ===== -->
+  <button class="back-to-top" id="back-to-top" aria-label="Back to top" title="Back to top">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+  </button>
+
+  <!-- ===== Embedded Data ===== -->
+  <script type="application/json" id="terminal-data">
+[
+  { "command": "jamf-cli pro overview" },
+  { "command": "jamf-cli pro report security" },
+  { "command": "jamf-cli pro device jamf-mini" },
+  { "command": "jamf-cli pro comp list -o table --filter \"osVersion>=15\"" },
+  { "command": "jamf-cli protect analytics list -o table" },
+  { "command": "jamf-cli platform ai-policies list -o table" },
+  { "command": "jamf-cli pro comp erase --serial H2WDT4RGQ6P0 --yes" },
+  { "command": "jamf-cli pro backup --output ./backup/" }
+]
+  </script>
+
+  <script type="application/json" id="hero-examples">
+{
+  "pro overview": {
+    "example": "jamf-cli pro overview",
+    "output": "  INSTANCE OVERVIEW\n\n  Health & Alerts\n  Health Status                  \u2705 Healthy\n  Pending Computer Commands             0\n\n  Fleet\n  Managed Computers                    18\n  Managed Devices                       4"
+  },
+  "pro device": {
+    "example": "jamf-cli pro device jamf-mini",
+    "output": "  Identity\n  Name                       jamf-mini\n  Serial Number          H2WDT4RGQ6P0\n  Managed                          Yes\n\n  Hardware & OS\n  Model              Mac mini (M1, 2020)\n  OS                       macOS 26.1.0"
+  },
+  "pro report security": {
+    "example": "jamf-cli pro report security",
+    "output": "\u2500\u2500 Security Summary \u2500\u2500\nRESULTS (1 total)\n\n FILEVAULT  FIREWALL  GATEKEEPER  SIP\n 0.0%       5.6%      100.0%      72.2%"
+  },
+  "pro computers list": {
+    "example": "jamf-cli pro comp list -o table",
+    "output": "RESULTS (18 total)\n\n NAME                    SERIAL         OS_VERSION\n admin's MacBook Air     FVFHG3AYQ6L4   26.0.0\n jamf-mini               H2WDT4RGQ6P0   26.1.0"
+  },
+  "pro computers apply": {
+    "example": "echo '{\"name\":\"HQ\"}' | jamf-cli pro buildings apply",
+    "output": "\u2713 Created building \"HQ\" (id: 3)"
+  },
+  "pro setup": {
+    "example": "jamf-cli pro setup --url https://jamf.company.com",
+    "output": "Jamf Pro URL: https://jamf.company.com\nAuth method: OAuth2 (Client Credentials)\n\u2713 Credentials verified\n\u2713 Profile 'default' saved to config"
+  },
+  "pro comp erase": {
+    "example": "jamf-cli pro comp erase --serial H2WDT4RGQ6P0",
+    "output": "[dry-run] Would erase computer H2WDT4RGQ6P0 (jamf-mini)\nUse --yes --confirm-destructive to execute."
+  },
+  "platform ai-policies list": {
+    "example": "jamf-cli platform ai-policies list -o table",
+    "output": "RESULTS (3 total)\n\n NAME                        STATUS     VERSION\n Default AI policy           published  v2\n Engineering copilots        published  v1\n Contractors                 draft      -"
+  },
+  "protect analytics list": {
+    "example": "jamf-cli protect analytics list -o table",
+    "output": "RESULTS (847 total)\n\n NAME                          SEVERITY  ENABLED\n Suspicious Download           High      \u2713\n Unauthorized USB Mount        Medium    \u2713"
+  },
+  "protect overview": {
+    "example": "jamf-cli protect overview",
+    "output": "  PROTECT OVERVIEW\n\n  Plans                          12\n  Analytics                     847\n  Analytic Sets                   8\n  Computers                   1,523"
+  }
+}
+  </script>
+
+  <!-- ===== Scripts ===== -->
+  <script>
+    // Hamburger menu toggle
+    document.querySelector('.hamburger').addEventListener('click', function () {
+      var expanded = this.getAttribute('aria-expanded') === 'true';
+      this.setAttribute('aria-expanded', String(!expanded));
+      document.querySelector('nav').classList.toggle('nav-open', !expanded);
+    });
+
+    // Theme toggle — three states cycling system → light → dark. System is
+    // the default (no data-theme attribute, no stored value), so the page
+    // follows the OS. The head script already applied any saved light/dark
+    // before first paint; this only handles the click. Uses the View
+    // Transitions API for a radial reveal expanding from the button when
+    // available, falling back to an instant swap (and always instant under
+    // prefers-reduced-motion).
+    (function () {
+      var toggle = document.getElementById('theme-toggle');
+      var ORDER = ['system', 'light', 'dark'];
+      var LABEL = { system: 'system', light: 'light', dark: 'dark' };
+
+      function current() {
+        var t = document.documentElement.getAttribute('data-theme');
+        return t === 'light' || t === 'dark' ? t : 'system';
+      }
+
+      // Pin the browser-chrome color to the rendered page background so it
+      // tracks the tokens instead of duplicating their hex. Each meta is
+      // scoped to one scheme, so a manual choice writes the rendered color
+      // into both (the page ignores the OS then) while system mode restores
+      // the declared pair and lets the browser pick.
+      function syncThemeColor() {
+        var manual = current() !== 'system';
+        var c = getComputedStyle(document.body).backgroundColor;
+        document.querySelectorAll('meta[name="theme-color"]').forEach(function (m) {
+          var media = m.getAttribute('media') || '';
+          var scheme = media.indexOf('dark') !== -1 ? 'dark' : 'light';
+          m.setAttribute('content', manual ? c : window.THEME_COLORS[scheme]);
+        });
+      }
+
+      function describe() {
+        var mode = current();
+        var next = ORDER[(ORDER.indexOf(mode) + 1) % ORDER.length];
+        toggle.setAttribute('data-mode', mode);
+        toggle.setAttribute('aria-label', 'Theme: ' + LABEL[mode]);
+        toggle.setAttribute('title', 'Theme: ' + LABEL[mode] + '. Click for ' + LABEL[next] + '.');
+      }
+
+      function apply(mode) {
+        if (mode === 'system') {
+          document.documentElement.removeAttribute('data-theme');
+          try { localStorage.removeItem('theme'); } catch (e) { /* storage blocked */ }
+        } else {
+          document.documentElement.setAttribute('data-theme', mode);
+          try { localStorage.setItem('theme', mode); } catch (e) { /* storage blocked */ }
+        }
+        syncThemeColor();
+        describe();
+      }
+
+      toggle.addEventListener('click', function () {
+        var next = ORDER[(ORDER.indexOf(current()) + 1) % ORDER.length];
+        var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        if (!document.startViewTransition || reduced) { apply(next); return; }
+
+        var r = toggle.getBoundingClientRect();
+        var x = r.left + r.width / 2;
+        var y = r.top + r.height / 2;
+        var radius = Math.hypot(
+          Math.max(x, window.innerWidth - x),
+          Math.max(y, window.innerHeight - y)
+        );
+        var vt = document.startViewTransition(function () { apply(next); });
+        vt.ready.then(function () {
+          document.documentElement.animate(
+            { clipPath: ['circle(0px at ' + x + 'px ' + y + 'px)', 'circle(' + radius + 'px at ' + x + 'px ' + y + 'px)'] },
+            { duration: 450, easing: 'ease-in-out', pseudoElement: '::view-transition-new(root)' }
+          );
+        // A transition the browser skips (a rapid second click, a hidden
+        // document) rejects vt.ready. The theme still applies, so absorb it
+        // rather than leaving an unhandled rejection in the console.
+        }).catch(function () { /* transition skipped — theme already applied */ });
+      });
+
+      // System mode follows the OS live.
+      window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+        if (current() === 'system') syncThemeColor();
+      });
+
+      describe();
+      syncThemeColor();
+    })();
+
+    // Back to top button
+    (function () {
+      var btn = document.getElementById('back-to-top');
+      window.addEventListener('scroll', function () {
+        btn.classList.toggle('visible', window.scrollY > 600);
+      }, { passive: true });
+      btn.addEventListener('click', function () {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      });
+    })();
+
+    // Focus search on "/" key (like GitHub)
+    document.addEventListener('keydown', function (e) {
+      if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        var tag = document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || document.activeElement.isContentEditable) return;
+        e.preventDefault();
+        var search = document.getElementById('search');
+        if (search) search.focus();
+      }
+      if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+        var tag = document.activeElement.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+        e.preventDefault();
+        window.toggleShortcutsModal();
+      }
+      if (e.key === 'Escape') {
+        var modal = document.getElementById('kbd-modal');
+        if (modal.classList.contains('open')) {
+          window.closeShortcutsModal();
+          return;
+        }
+        var search = document.getElementById('search');
+        if (search && search.value) {
+          e.preventDefault();
+          search.value = '';
+          search.dispatchEvent(new Event('input'));
+          var wrap = search.closest('.search-wrap');
+          if (wrap) wrap.classList.remove('has-value');
+          search.blur();
+        }
+      }
+    });
+
+    // Keyboard shortcuts modal. Opening it has to move focus inside, or a
+    // keyboard reader has to tab through the whole commands table to reach
+    // the one control in it — the dialog sits ahead of the FAQ in the DOM.
+    // Closing gives focus back to whatever opened it.
+    (function () {
+      var modal = document.getElementById('kbd-modal');
+      var closeBtn = document.getElementById('kbd-modal-close');
+      var opener = null;
+
+      function openModal() {
+        opener = document.activeElement;
+        modal.classList.add('open');
+        closeBtn.focus();
+      }
+
+      function closeModal() {
+        modal.classList.remove('open');
+        if (opener && opener.focus) opener.focus();
+        opener = null;
+      }
+
+      window.toggleShortcutsModal = function () {
+        if (modal.classList.contains('open')) closeModal();
+        else openModal();
+      };
+      window.closeShortcutsModal = closeModal;
+
+      document.getElementById('kbd-hint-btn').addEventListener('click', window.toggleShortcutsModal);
+      closeBtn.addEventListener('click', closeModal);
+      modal.addEventListener('click', function (e) {
+        if (e.target === this) closeModal();
+      });
+      // Close is the only control, so Tab and Shift+Tab both stay on it.
+      modal.addEventListener('keydown', function (e) {
+        if (e.key !== 'Tab') return;
+        e.preventDefault();
+        closeBtn.focus();
+      });
+    })();
+  </script>
+  <script src="terminal.js"></script>
+  <script src="catalog.js"></script>
+  <script src="palette.js"></script>
+</body>
+</html>

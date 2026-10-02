@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+      - name: Test
+        run: make test
+
+      - name: Verify generated code is up-to-date
+        run: make verify-generated
+
+      # verify-generated only diffs internal/commands/pro/generated/, but
+      # `make generate` writes all three trees, so platform and security output
+      # was regenerated and then never checked. A shared change like the scaffold
+      # walker rewrites all three at once, so all three need a guard.
+      - name: Verify generated platform code is up-to-date
+        run: make verify-platform-specs
+
+      - name: Verify generated security code is up-to-date
+        run: make verify-security-specs
+
+      - name: Lint dead code (warn-only)
+        run: make lint-dead
+        continue-on-error: true
+
+      - name: Build
+        run: make build
+
+      - name: Verify site generator compiles
+        run: go build ./generator/site/...
+
+      - name: Verify site supports all products
+        run: ./scripts/verify-site-products.sh
+
+      - name: Verify site JS files parse
+        run: |
+          for f in docs/site/*.js; do
+            node --check "$f" || { echo "JS syntax error in $f"; exit 1; }
+          done
+
+      - name: Verify site output (generator runs, artifacts well-formed, pillar coverage)
+        run: make verify-site-output

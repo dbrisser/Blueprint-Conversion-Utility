@@ -1,0 +1,397 @@
+// Copyright 2026, Jamf Software LLC
+
+package platform
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+
+	"github.com/jamf/jamfplatform-go-sdk/jamfplatform"
+)
+
+const resolveTestTenantID = "resolve-tenant"
+
+func newResolveTestClient(t *testing.T, mux *http.ServeMux) *jamfplatform.Client {
+	t.Helper()
+	mux.HandleFunc("/auth/token", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"access_token": "test-token",
+			"token_type":   "Bearer",
+			"expires_in":   3600,
+		})
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return jamfplatform.NewClient(
+		srv.URL,
+		"test-id",
+		"test-secret",
+		jamfplatform.WithTenantID(resolveTestTenantID),
+	)
+}
+
+// TestResolveIDByName_NonPaginated verifies that the first request to a
+// non-paginated endpoint (e.g. compliance-benchmarks) does not include
+// page/page-size params. This was the root cause of 500s on benchmarks.
+func TestResolveIDByName_NonPaginated(t *testing.T) {
+	mux := http.NewServeMux()
+	var capturedQuery string
+	path := "/benchmarks/v1/tenant/" + resolveTestTenantID + "/benchmarks"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		capturedQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"benchmarks": []any{
+				map[string]any{"id": "bm-abc", "title": "CIS v8"},
+				map[string]any{"id": "bm-def", "title": "STIG macOS"},
+			},
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByName(context.Background(), client, path, "CIS v8")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "bm-abc" {
+		t.Errorf("id = %q, want %q", id, "bm-abc")
+	}
+	q, _ := url.ParseQuery(capturedQuery)
+	if q.Get("page") != "" || q.Get("page-size") != "" {
+		t.Errorf("first request must not include pagination params; got query %q", capturedQuery)
+	}
+}
+
+// TestResolveIDByName_MatchesByTitle verifies matching on "title" field,
+// which is used by benchmarks (not "name").
+func TestResolveIDByName_MatchesByTitle(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/some/v1/tenant/" + resolveTestTenantID + "/items"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{"id": "t-1", "title": "The One"},
+				map[string]any{"id": "t-2", "title": "Other"},
+			},
+			"totalCount": 2,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByName(context.Background(), client, path, "The One")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "t-1" {
+		t.Errorf("id = %q, want %q", id, "t-1")
+	}
+}
+
+// TestResolveIDByName_PaginatedMultiPage verifies that when the first page is
+// full (100 items + totalCount present), subsequent pages are fetched with
+// page=1, page=2, ... until the target is found.
+func TestResolveIDByName_PaginatedMultiPage(t *testing.T) {
+	const pageSize = 100
+	mux := http.NewServeMux()
+	path := "/res/v1/tenant/" + resolveTestTenantID + "/items"
+
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		pageParam := r.URL.Query().Get("page")
+
+		var results []any
+		if pageParam == "" {
+			// First request (no pagination params): return a full page of filler.
+			for i := range pageSize {
+				results = append(results, map[string]any{
+					"id":   fmt.Sprintf("id-%d", i),
+					"name": fmt.Sprintf("item-%d", i),
+				})
+			}
+		} else {
+			// Subsequent pages: return the target on page 1.
+			results = []any{
+				map[string]any{"id": "page2-target", "name": "Target Item"},
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results":    results,
+			"totalCount": pageSize + 1,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByName(context.Background(), client, path, "Target Item")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "page2-target" {
+		t.Errorf("id = %q, want %q", id, "page2-target")
+	}
+}
+
+// TestResolveIDByName_NotFound verifies ErrNotFound when no item matches.
+func TestResolveIDByName_NotFound(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/res/v1/tenant/" + resolveTestTenantID + "/items"
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results":    []any{map[string]any{"id": "id-1", "name": "Exists"}},
+			"totalCount": 1,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	_, err := ResolveIDByName(context.Background(), client, path, "Missing")
+	if !IsNotFound(err) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+// TestResolveIDByName_Ambiguous verifies that when two items share the same
+// name on the same page, an error is returned rather than silently picking one.
+func TestResolveIDByName_Ambiguous(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/device-groups/v1/tenant/" + resolveTestTenantID + "/device-groups"
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{"id": "dg-computer", "name": "All Managed", "deviceType": "COMPUTER"},
+				map[string]any{"id": "dg-mobile", "name": "All Managed", "deviceType": "MOBILE"},
+			},
+			"totalCount": 2,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	_, err := ResolveIDByName(context.Background(), client, path, "All Managed")
+	if err == nil {
+		t.Fatal("expected ambiguous error, got nil")
+	}
+	if IsNotFound(err) {
+		t.Errorf("should not be ErrNotFound, got %v", err)
+	}
+}
+
+// TestResolveIDByNameFiltered verifies that the filter expression is appended
+// as a query param and narrows the result to the matching device type.
+func TestResolveIDByNameFiltered(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/device-groups/v1/tenant/" + resolveTestTenantID + "/device-groups"
+	var capturedFilter string
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		capturedFilter = r.URL.Query().Get("filter")
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results": []any{
+				map[string]any{"id": "dg-computer", "name": "All Managed", "deviceType": "COMPUTER"},
+			},
+			"totalCount": 1,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByNameFiltered(context.Background(), client, path, "All Managed", `deviceType=="COMPUTER"`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "dg-computer" {
+		t.Errorf("id = %q, want %q", id, "dg-computer")
+	}
+	if capturedFilter != `deviceType=="COMPUTER"` {
+		t.Errorf("filter = %q, want %q", capturedFilter, `deviceType=="COMPUTER"`)
+	}
+}
+
+// TestResolveIDByName_BareArray verifies matching against bare-array responses.
+func TestResolveIDByName_BareArray(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/res/v1/tenant/" + resolveTestTenantID + "/items"
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]any{
+			map[string]any{"id": "arr-1", "name": "Array Item"},
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByName(context.Background(), client, path, "Array Item")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "arr-1" {
+		t.Errorf("id = %q, want %q", id, "arr-1")
+	}
+}
+
+// TestExtractIDNonStringID pins that an ID which is not a string on the wire is
+// still read.
+//
+// Every platform resource but one keys on a UUID, so extractID only ever had to
+// handle strings — and then an SSO domain's ID turned out to be a small
+// integer. The failure was silent and read as the wrong thing entirely: the
+// name matched, the type assertion did not, so firstMatch counted zero matches
+// and --name reported `no item with name "example.com"`, indistinguishable from
+// a typo.
+func TestExtractIDNonStringID(t *testing.T) {
+	cases := []struct {
+		name string
+		item map[string]any
+		want string
+	}{
+		{"string uuid", map[string]any{"id": "8a2d0ff2-4336-44ca-bd61-1e7e88258740"}, "8a2d0ff2-4336-44ca-bd61-1e7e88258740"},
+		{"float64 integer", map[string]any{"id": float64(1552)}, "1552"},
+		{"json.Number", map[string]any{"id": json.Number("1552")}, "1552"},
+		// A float64 large enough to lose precision as a string is not something
+		// this surface produces, but it must not render in exponent form.
+		{"large float64", map[string]any{"id": float64(20250831123456)}, "20250831123456"},
+		{"alternate key", map[string]any{"blueprintId": "bp-1"}, "bp-1"},
+		{"no id", map[string]any{"domain": "example.com"}, ""},
+		{"unusable type", map[string]any{"id": true}, ""},
+	}
+	for _, tc := range cases {
+		if got := extractID(tc.item); got != tc.want {
+			t.Errorf("%s: extractID = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// TestMatchesNameInExtraField pins the per-resource name property.
+//
+// The extra field is consulted per call rather than added to the default list
+// because a global "domain" match would let any resource carrying an unrelated
+// domain property resolve on it.
+func TestMatchesNameInExtraField(t *testing.T) {
+	domain := map[string]any{"domain": "example.com", "id": float64(1552)}
+
+	if matchesNameIn(domain, "example.com", "") {
+		t.Error("without the extra field, a domain must not match on the default keys")
+	}
+	if !matchesNameIn(domain, "example.com", "domain") {
+		t.Error("with the extra field, a domain must match")
+	}
+	// The defaults still apply alongside the extra field.
+	named := map[string]any{"name": "Example Corp", "id": "con_1"}
+	if !matchesNameIn(named, "Example Corp", "domain") {
+		t.Error("naming an extra field must not disable the default keys")
+	}
+	if matchesNameIn(domain, "other.com", "domain") {
+		t.Error("a non-matching value must not match")
+	}
+}
+
+// TestResolveIDByName_AmbiguousAcrossPages covers the case per-page matching
+// could not see. Matches were decided one page at a time and the function
+// returned on the first page holding exactly one, so a name repeated either
+// side of a 100-item boundary read as unique — the ambiguity check firing only
+// when both copies happened to land on the same page. The caller then upserted
+// whichever copy sorted first, with no error.
+func TestResolveIDByName_AmbiguousAcrossPages(t *testing.T) {
+	const pageSize = 100
+	mux := http.NewServeMux()
+	path := "/res/v1/items"
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var results []any
+		if r.URL.Query().Get("page") == "" {
+			// A full first page whose last item carries the target name, so the
+			// lookup has a match in hand *and* a reason to keep paging.
+			for i := range pageSize - 1 {
+				results = append(results, map[string]any{"id": fmt.Sprintf("id-%d", i), "name": fmt.Sprintf("item-%d", i)})
+			}
+			results = append(results, map[string]any{"id": "page1-copy", "name": "Twin"})
+		} else {
+			results = []any{map[string]any{"id": "page2-copy", "name": "Twin"}}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"results": results, "totalCount": pageSize + 1})
+	})
+	client := newResolveTestClient(t, mux)
+
+	id, err := ResolveIDByName(context.Background(), client, path, "Twin")
+	if err == nil {
+		t.Fatalf("resolved %q as unique across a page boundary, want an ambiguity error", id)
+	}
+	if IsNotFound(err) {
+		t.Errorf("should not be ErrNotFound, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "ambiguous match: 2") {
+		t.Errorf("error = %v, want it to count both copies", err)
+	}
+}
+
+// TestResolveIDByName_MatchedWithNoID covers a name that matches an item the
+// list gives no ID for. It must not read as absence: a caller that treats
+// ErrNotFound as "create it" — apply does — would otherwise create a second
+// copy of something that already exists, every run, silently.
+//
+// Security Cloud's device groups are the live case. Wire-checked 2026-09-08 on
+// an EU environment credential: a stored group is returned with both id and
+// name, and the implicit "Default Group" is returned with a name alone.
+func TestResolveIDByName_MatchedWithNoID(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/securitycloud/v2/groups"
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"groups": []any{
+				map[string]any{"name": "Default Group"},
+				map[string]any{"id": "grp-1", "name": "Engineering"},
+			},
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	if _, err := ResolveIDByName(context.Background(), client, path, "Default Group"); err == nil {
+		t.Fatal("expected an error for a match the list gives no ID for, got nil")
+	} else if IsNotFound(err) {
+		t.Errorf("must not be ErrNotFound — that is what makes a caller create a duplicate: %v", err)
+	} else if !strings.Contains(err.Error(), "no ID") {
+		t.Errorf("error = %v, want it to say the list returns no ID", err)
+	}
+
+	// The id-bearing sibling in the same response still resolves, so this is a
+	// per-item property and not a per-endpoint one.
+	id, err := ResolveIDByName(context.Background(), client, path, "Engineering")
+	if err != nil {
+		t.Fatalf("id-bearing item: %v", err)
+	}
+	if id != "grp-1" {
+		t.Errorf("id = %q, want grp-1", id)
+	}
+}
+
+// TestResolveIDByName_AmbiguityRemedyIsNotAPositional pins the wording. The
+// error used to say "pass the positional ID to disambiguate", and apply — the
+// caller that most needs the message — takes no positional at all: its whole
+// contract is that the name comes from the body. An error naming a remedy the
+// command cannot offer is worse than a bare failure.
+func TestResolveIDByName_AmbiguityRemedyIsNotAPositional(t *testing.T) {
+	mux := http.NewServeMux()
+	path := "/res/v1/items"
+	mux.HandleFunc(path, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"results":    []any{map[string]any{"id": "a", "name": "Twin"}, map[string]any{"id": "b", "name": "Twin"}},
+			"totalCount": 2,
+		})
+	})
+	client := newResolveTestClient(t, mux)
+
+	_, err := ResolveIDByName(context.Background(), client, path, "Twin")
+	if err == nil {
+		t.Fatal("expected an ambiguity error")
+	}
+	if strings.Contains(err.Error(), "positional") {
+		t.Errorf("error = %v, want a remedy every caller can satisfy", err)
+	}
+}

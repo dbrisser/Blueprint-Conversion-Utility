@@ -1,0 +1,10 @@
+# Copyright 2026, Jamf Software LLC
+
+version: "2"
+
+run:
+  timeout: 3m
+
+formatters:
+  enable:
+    - gofumpt

@@ -1,0 +1,1585 @@
+// Copyright 2026, Jamf Software LLC
+
+package commands
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/Jamf-Concepts/jamf-cli/internal/registry"
+)
+
+// overviewMockClient implements registry.HTTPClient for testing overview fetches.
+type overviewMockClient struct {
+	responses map[string]overviewMockResponse
+
+	// keyed is consulted before responses and is keyed on `METHOD path`
+	// including the query, so a test can pin a request's *shape* rather than
+	// only its base path. responses alone falls back to a query-stripped
+	// lookup, which means dropping a `&section=…` from a collector changes
+	// nothing any test can see.
+	keyed map[string]overviewMockResponse
+
+	// requests records every `METHOD path` this client was asked for, in order,
+	// for the same reason: a request nobody can observe is a request no test
+	// can hold to its shape. Guarded, since the collectors are concurrent.
+	mu       sync.Mutex
+	requests []string
+}
+
+type overviewMockResponse struct {
+	statusCode int
+	body       string
+}
+
+// recorded returns the requests made so far, in order.
+func (m *overviewMockClient) recorded() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]string(nil), m.requests...)
+}
+
+// requestedMatching returns the recorded requests containing substr.
+func (m *overviewMockClient) requestedMatching(substr string) []string {
+	var out []string
+	for _, r := range m.recorded() {
+		if strings.Contains(r, substr) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func (m *overviewMockClient) Do(_ context.Context, method, path string, _ io.Reader) (*http.Response, error) {
+	m.mu.Lock()
+	m.requests = append(m.requests, method+" "+path)
+	m.mu.Unlock()
+
+	reply := func(resp overviewMockResponse) *http.Response {
+		return &http.Response{
+			StatusCode: resp.statusCode,
+			Body:       io.NopCloser(strings.NewReader(resp.body)),
+			Header:     make(http.Header),
+		}
+	}
+
+	if resp, ok := m.keyed[method+" "+path]; ok {
+		return reply(resp), nil
+	}
+	if resp, ok := m.responses[path]; ok {
+		return reply(resp), nil
+	}
+
+	// Try without query params
+	if before, _, ok := strings.Cut(path, "?"); ok {
+		if resp, ok := m.responses[before]; ok {
+			return reply(resp), nil
+		}
+	}
+
+	return nil, fmt.Errorf("no mock response for %s %s", method, path)
+}
+
+func TestFetchPaginatedCount(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/buildings": {200, `{"totalCount": 42, "results": []}`},
+		},
+	}
+
+	got, err := fetchPaginatedCount(context.Background(), client, "/v1/buildings")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "42" {
+		t.Errorf("got %q, want %q", got, "42")
+	}
+}
+
+func TestFetchPaginatedCount_LargeNumber(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/scripts": {200, `{"totalCount": 1234, "results": []}`},
+		},
+	}
+
+	got, err := fetchPaginatedCount(context.Background(), client, "/v1/scripts")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "1,234" {
+		t.Errorf("got %q, want %q", got, "1,234")
+	}
+}
+
+func TestFetchArrayCount(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/sites": {200, `[{"id":1,"name":"Main"},{"id":2,"name":"Branch"}]`},
+		},
+	}
+
+	got, err := fetchArrayCount(context.Background(), client, "/v1/sites")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "2" {
+		t.Errorf("got %q, want %q", got, "2")
+	}
+}
+
+func TestFetchArrayCount_Empty(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/sites": {200, `[]`},
+		},
+	}
+
+	got, err := fetchArrayCount(context.Background(), client, "/v1/sites")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "0" {
+		t.Errorf("got %q, want %q", got, "0")
+	}
+}
+
+func TestFetchPaginatedCount_Error(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/buildings": {403, `{"httpStatus":403}`},
+		},
+	}
+
+	_, err := fetchPaginatedCount(context.Background(), client, "/v1/buildings")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+		return
+	}
+}
+
+func TestFetchArrayCount_Error(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{},
+	}
+
+	_, err := fetchArrayCount(context.Background(), client, "/v1/nonexistent")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+		return
+	}
+}
+
+func TestCommaFormat(t *testing.T) {
+	tests := []struct {
+		input int64
+		want  string
+	}{
+		{0, "0"},
+		{42, "42"},
+		{999, "999"},
+		{1000, "1,000"},
+		{1234, "1,234"},
+		{12345, "12,345"},
+		{123456, "123,456"},
+		{1234567, "1,234,567"},
+	}
+
+	for _, tt := range tests {
+		got := commaFormat(tt.input)
+		if got != tt.want {
+			t.Errorf("commaFormat(%d) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestEnabledDisabled(t *testing.T) {
+	if got := enabledDisabled(true); got != "enabled" {
+		t.Errorf("got %q, want %q", got, "enabled")
+	}
+	if got := enabledDisabled(false); got != "disabled" {
+		t.Errorf("got %q, want %q", got, "disabled")
+	}
+	if got := enabledDisabled(nil); got != "disabled" {
+		t.Errorf("got %q for nil, want %q", got, "disabled")
+	}
+	if got := enabledDisabled("true"); got != "disabled" {
+		t.Errorf("got %q for string, want %q", got, "disabled")
+	}
+}
+
+func TestPrintOverviewTable(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Instance Info",
+			Items: []overviewItem{
+				{"Server URL", "https://example.jamfcloud.com", ""},
+				{"Health Status", "ok", ""},
+			},
+		},
+		{
+			Name: "Jamf Pro Features",
+			Items: []overviewItem{
+				{"VPP Token", "enabled", ""},
+				{"SMTP", "disabled", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, false)
+	output := buf.String()
+
+	// Verify section headers
+	if !strings.Contains(output, "INSTANCE OVERVIEW") {
+		t.Error("missing INSTANCE OVERVIEW header")
+	}
+	if !strings.Contains(output, "Instance Info") {
+		t.Error("missing Instance Info section")
+	}
+	if !strings.Contains(output, "Jamf Pro Features") {
+		t.Error("missing Jamf Pro Features section")
+	}
+
+	// Verify values
+	if !strings.Contains(output, "https://example.jamfcloud.com") {
+		t.Error("missing server URL value")
+	}
+	if !strings.Contains(output, "ok") {
+		t.Error("missing health status value")
+	}
+	if !strings.Contains(output, "enabled") {
+		t.Error("missing enabled value")
+	}
+	if !strings.Contains(output, "disabled") {
+		t.Error("missing disabled value")
+	}
+}
+
+func TestPrintOverviewTable_WithColor(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Test",
+			Items: []overviewItem{
+				{"Health", "ok", ""},
+				{"Feature", "disabled", ""},
+				{"Error", "offline", ""},
+				{"Missing", "N/A", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	output := buf.String()
+
+	// Color codes should be present
+	if !strings.Contains(output, "\033[32m") {
+		t.Error("missing green color code for 'ok'")
+	}
+	if !strings.Contains(output, "\033[2m") {
+		t.Error("missing dim color code for 'disabled'")
+	}
+	if !strings.Contains(output, "\033[31m") {
+		t.Error("missing red color code for 'offline'")
+	}
+}
+
+func TestOverviewToRows(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Instance Info",
+			Items: []overviewItem{
+				{"Server URL", "https://example.com", ""},
+				{"Version", "10.52.0", ""},
+			},
+		},
+		{
+			Name: "Features",
+			Items: []overviewItem{
+				{"VPP", "enabled", ""},
+			},
+		},
+	}
+
+	rows := overviewToRows(sections)
+
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3", len(rows))
+	}
+
+	// First row
+	if rows[0]["section"] != "Instance Info" {
+		t.Errorf("row 0 section = %q, want %q", rows[0]["section"], "Instance Info")
+	}
+	if rows[0]["resource"] != "Server URL" {
+		t.Errorf("row 0 resource = %q, want %q", rows[0]["resource"], "Server URL")
+	}
+	if rows[0]["value"] != "https://example.com" {
+		t.Errorf("row 0 value = %q, want %q", rows[0]["value"], "https://example.com")
+	}
+
+	// Last row
+	if rows[2]["section"] != "Features" {
+		t.Errorf("row 2 section = %q, want %q", rows[2]["section"], "Features")
+	}
+	if rows[2]["resource"] != "VPP" {
+		t.Errorf("row 2 resource = %q, want %q", rows[2]["resource"], "VPP")
+	}
+	if rows[2]["value"] != "enabled" {
+		t.Errorf("row 2 value = %q, want %q", rows[2]["value"], "enabled")
+	}
+}
+
+func TestCSA404_NotConfigured(t *testing.T) {
+	// Simulate the CSA token fetch returning 404.
+	// In the actual overview, this is handled inline in runOverview.
+	// Here we test the pattern: 404 → "Not configured".
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/csa/token": {404, `{"httpStatus":404}`},
+		},
+	}
+
+	resp, err := client.Do(context.Background(), "GET", "/v1/csa/token", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var result string
+	if resp.StatusCode == http.StatusNotFound {
+		result = "Not configured"
+	}
+
+	if result != "Not configured" {
+		t.Errorf("got %q, want %q", result, "Not configured")
+	}
+}
+
+func TestFetchJSON(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/jamf-pro-version": {200, `{"version":"10.52.0"}`},
+		},
+	}
+
+	data, err := fetchJSON(context.Background(), client, "/v1/jamf-pro-version")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if v, ok := data["version"].(string); !ok || v != "10.52.0" {
+		t.Errorf("got version=%v, want %q", data["version"], "10.52.0")
+	}
+}
+
+func TestFetchJSON_HTTPError(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/jamf-pro-version": {500, `Internal Server Error`},
+		},
+	}
+
+	_, err := fetchJSON(context.Background(), client, "/v1/jamf-pro-version")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+		return
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("expected HTTP 500 in error, got: %v", err)
+	}
+}
+
+func TestFetchJSON_InvalidJSON(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/test": {200, `not json`},
+		},
+	}
+
+	_, err := fetchJSON(context.Background(), client, "/v1/test")
+	if err == nil {
+		t.Fatal("expected error for invalid JSON, got nil")
+		return
+	}
+}
+
+func TestFetchEnrollmentSettings(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v4/enrollment": {200, `{
+				"macOsEnterpriseEnrollmentEnabled": true,
+				"iosEnterpriseEnrollmentEnabled": false,
+				"iosPersonalEnrollmentEnabled": true,
+				"accountDrivenUserEnrollmentEnabled": false,
+				"accountDrivenDeviceMacosEnrollmentEnabled": true
+			}`},
+		},
+	}
+
+	data, err := fetchJSON(context.Background(), client, "/v4/enrollment")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	tests := []struct {
+		field string
+		want  string
+	}{
+		{"macOsEnterpriseEnrollmentEnabled", "enabled"},
+		{"iosEnterpriseEnrollmentEnabled", "disabled"},
+		{"iosPersonalEnrollmentEnabled", "enabled"},
+		{"accountDrivenUserEnrollmentEnabled", "disabled"},
+		{"accountDrivenDeviceMacosEnrollmentEnabled", "enabled"},
+	}
+
+	for _, tt := range tests {
+		got := enabledDisabled(data[tt.field])
+		if got != tt.want {
+			t.Errorf("enabledDisabled(%s) = %q, want %q", tt.field, got, tt.want)
+		}
+	}
+}
+
+func TestFetchSelfServiceSettings(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/self-service/settings": {200, `{
+				"installSettings": {"installAutomatically": true},
+				"loginSettings": {"userLoginLevel": "Required"},
+				"configurationSettings": {"notificationsEnabled": false}
+			}`},
+		},
+	}
+
+	data, err := fetchJSON(context.Background(), client, "/v1/self-service/settings")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	install, ok := data["installSettings"].(map[string]any)
+	if !ok {
+		t.Fatal("installSettings not a map")
+		return
+	}
+	if got := enabledDisabled(install["installAutomatically"]); got != "enabled" {
+		t.Errorf("installAutomatically = %q, want %q", got, "enabled")
+	}
+
+	login, ok := data["loginSettings"].(map[string]any)
+	if !ok {
+		t.Fatal("loginSettings not a map")
+		return
+	}
+	if level, ok := login["userLoginLevel"].(string); !ok || level != "Required" {
+		t.Errorf("userLoginLevel = %v, want %q", login["userLoginLevel"], "Required")
+	}
+
+	config, ok := data["configurationSettings"].(map[string]any)
+	if !ok {
+		t.Fatal("configurationSettings not a map")
+		return
+	}
+	if got := enabledDisabled(config["notificationsEnabled"]); got != "disabled" {
+		t.Errorf("notificationsEnabled = %q, want %q", got, "disabled")
+	}
+}
+
+func TestFetchLAPSSettings(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v2/local-admin-password/settings": {200, `{
+				"autoDeployEnabled": true,
+				"autoRotateEnabled": false
+			}`},
+		},
+	}
+
+	data, err := fetchJSON(context.Background(), client, "/v2/local-admin-password/settings")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := enabledDisabled(data["autoDeployEnabled"]); got != "enabled" {
+		t.Errorf("autoDeployEnabled = %q, want %q", got, "enabled")
+	}
+	if got := enabledDisabled(data["autoRotateEnabled"]); got != "disabled" {
+		t.Errorf("autoRotateEnabled = %q, want %q", got, "disabled")
+	}
+}
+
+func TestFetchDeviceCommunicationSettings(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/device-communication-settings": {200, `{
+				"autoRenewComputerMdmProfileWhenDeviceIdentityCertExpiring": true,
+				"autoRenewMobileDeviceMdmProfileWhenDeviceIdentityCertExpiring": false,
+				"mdmProfileComputerExpirationLimitInDays": 180,
+				"mdmProfileMobileDeviceExpirationLimitInDays": 90
+			}`},
+		},
+	}
+
+	data, err := fetchJSON(context.Background(), client, "/v1/device-communication-settings")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if got := enabledDisabled(data["autoRenewComputerMdmProfileWhenDeviceIdentityCertExpiring"]); got != "enabled" {
+		t.Errorf("autoRenewComputer = %q, want %q", got, "enabled")
+	}
+	if got := enabledDisabled(data["autoRenewMobileDeviceMdmProfileWhenDeviceIdentityCertExpiring"]); got != "disabled" {
+		t.Errorf("autoRenewMobile = %q, want %q", got, "disabled")
+	}
+	if days, ok := data["mdmProfileComputerExpirationLimitInDays"].(float64); !ok || int(days) != 180 {
+		t.Errorf("computerDays = %v, want 180", data["mdmProfileComputerExpirationLimitInDays"])
+	}
+	if days, ok := data["mdmProfileMobileDeviceExpirationLimitInDays"].(float64); !ok || int(days) != 90 {
+		t.Errorf("mobileDays = %v, want 90", data["mdmProfileMobileDeviceExpirationLimitInDays"])
+	}
+}
+
+func TestFormatExpirationDate(t *testing.T) {
+	now := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		dateStr   string
+		wantColor string
+		wantWord  string // substring to check in formatted output
+	}{
+		{"2026-01-10", "red", "expired"},    // past
+		{"2026-01-20", "red", "5 days"},     // <30 days
+		{"2026-03-01", "yellow", "45 days"}, // 30-90 days
+		{"2026-06-01", "", "Jun 01, 2026"},  // >90 days, no color
+	}
+
+	for _, tt := range tests {
+		formatted, color := formatExpirationDate(tt.dateStr, now)
+		if color != tt.wantColor {
+			t.Errorf("formatExpirationDate(%q): color = %q, want %q", tt.dateStr, color, tt.wantColor)
+		}
+		if !strings.Contains(formatted, tt.wantWord) {
+			t.Errorf("formatExpirationDate(%q): formatted = %q, want to contain %q", tt.dateStr, formatted, tt.wantWord)
+		}
+	}
+}
+
+func TestFormatExpirationDate_ISO8601(t *testing.T) {
+	now := time.Date(2026, 1, 15, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		dateStr   string
+		wantColor string
+		wantWord  string
+	}{
+		{"RFC3339", "2026-06-01T12:00:00Z", "", "Jun 01, 2026"},
+		{"milliseconds", "2026-01-10T09:30:00.000Z", "red", "expired"},
+		{"date-only", "2026-03-01", "yellow", "days"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			formatted, color := formatExpirationDate(tt.dateStr, now)
+			if color != tt.wantColor {
+				t.Errorf("color = %q, want %q", color, tt.wantColor)
+			}
+			if !strings.Contains(formatted, tt.wantWord) {
+				t.Errorf("formatted = %q, want to contain %q", formatted, tt.wantWord)
+			}
+		})
+	}
+}
+
+func TestBuildEnrollmentItems_MultipleInstances(t *testing.T) {
+	get := func(key string) string {
+		m := map[string]string{
+			"ade_instances":      "2",
+			"ade_sync_status":    "SUCCESSFUL",
+			"computer_prestages": "3",
+			"md_prestages":       "1",
+			"vpp_locations":      "1",
+			"apns_cert":          "OK",
+			"ca_expires":         "Jan 01, 2030",
+			"mdm_renew_computer": "enabled",
+			"mdm_renew_mobile":   "disabled",
+		}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	getItem := func(resource, key string) overviewItem {
+		return overviewItem{resource, get(key), ""}
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	adeTokens := []tokenExpiry{
+		{Name: "Acme Corp", Value: "Jun 15, 2027", Color: ""},
+		{Name: "Schools", Value: "Mar 01, 2026 (expired)", Color: "red"},
+	}
+	vppTokens := []tokenExpiry{
+		{Name: "Acme VPP", Value: "Aug 01, 2027", Color: ""},
+	}
+
+	items := buildEnrollmentItems(get, getItem, item, adeTokens, vppTokens)
+
+	// Check ADE per-instance rows
+	foundADELabel := false
+	foundAcme := false
+	foundSchools := false
+	for _, it := range items {
+		if it.Resource == "ADE Token Expires" {
+			foundADELabel = true
+		}
+		if strings.Contains(it.Value, "Acme Corp") {
+			foundAcme = true
+		}
+		if strings.Contains(it.Value, "Schools") {
+			foundSchools = true
+			if it.ColorHint != "red" {
+				t.Errorf("Schools token color = %q, want red", it.ColorHint)
+			}
+		}
+	}
+	if !foundADELabel {
+		t.Error("missing 'ADE Token Expires' label")
+	}
+	if !foundAcme || !foundSchools {
+		t.Errorf("missing per-instance rows: acme=%v, schools=%v", foundAcme, foundSchools)
+	}
+
+	// Check VPP row
+	foundVPP := false
+	for _, it := range items {
+		if strings.Contains(it.Value, "Acme VPP") {
+			foundVPP = true
+		}
+	}
+	if !foundVPP {
+		t.Error("missing VPP per-instance row")
+	}
+
+	// Check APNs present
+	foundAPNs := false
+	for _, it := range items {
+		if it.Resource == "APNs Certificate" {
+			foundAPNs = true
+		}
+	}
+	if !foundAPNs {
+		t.Error("missing APNs Certificate row")
+	}
+}
+
+func TestBuildEnrollmentItems_NoInstances(t *testing.T) {
+	get := func(key string) string {
+		m := map[string]string{"ade_instances": "0", "vpp_locations": "0"}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	getItem := func(resource, key string) overviewItem {
+		return overviewItem{resource, get(key), ""}
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	items := buildEnrollmentItems(get, getItem, item, nil, nil)
+
+	// With no ADE tokens, should show "None configured"
+	found := false
+	for _, it := range items {
+		if it.Resource == "ADE Token Expires" && it.Value == "None configured" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected 'ADE Token Expires: None configured' when no instances")
+	}
+}
+
+func TestPrintOverviewTable_ExpirationColors(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Certificate Authority",
+			Items: []overviewItem{
+				{"CA Expires", "Jan 01, 2031", ""},
+				{"Token Expires", "Mar 01, 2026 (45 days)", "yellow"},
+				{"Token Expired", "Jan 01, 2025 (expired)", "red"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	output := buf.String()
+
+	if !strings.Contains(output, "\033[33m") {
+		t.Error("missing yellow color code for expiring token")
+	}
+	if !strings.Contains(output, "\033[31m") {
+		t.Error("missing red color code for expired token")
+	}
+	if !strings.Contains(output, "Jan 01, 2031") {
+		t.Error("missing plain CA expiration date")
+	}
+}
+
+func TestFetchClassicCount(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/policies": {200, `{"policies":[{"id":1,"name":"P1"},{"id":2,"name":"P2"}]}`},
+		},
+	}
+
+	got, err := fetchClassicCount(context.Background(), client, "/JSSResource/policies", "policies")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "2" {
+		t.Errorf("got %q, want %q", got, "2")
+	}
+}
+
+func TestFetchClassicCount_Empty(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/webhooks": {200, `{"webhooks":[]}`},
+		},
+	}
+
+	got, err := fetchClassicCount(context.Background(), client, "/JSSResource/webhooks", "webhooks")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "0" {
+		t.Errorf("got %q, want %q", got, "0")
+	}
+}
+
+func TestFetchClassicCount_MissingKey(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/policies": {200, `{"other_key":[]}`},
+		},
+	}
+
+	got, err := fetchClassicCount(context.Background(), client, "/JSSResource/policies", "policies")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "0" {
+		t.Errorf("got %q, want %q", got, "0")
+	}
+}
+
+func TestFetchClassicCount_HTTPError(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/policies": {403, `{"httpStatus":403}`},
+		},
+	}
+
+	_, err := fetchClassicCount(context.Background(), client, "/JSSResource/policies", "policies")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+		return
+	}
+}
+
+func TestFetchClassicNestedSize(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/computercommands": {200, `{
+				"computer_commands": {
+					"computer_command": [{"uuid":"a","command":"DeviceInformation"}],
+					"size": 68
+				}
+			}`},
+		},
+	}
+
+	got, err := fetchClassicNestedSize(context.Background(), client, "/JSSResource/computercommands", "computer_commands")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "68" {
+		t.Errorf("got %q, want %q", got, "68")
+	}
+}
+
+func TestFetchClassicNestedSize_Empty(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/computercommands": {200, `{
+				"computer_commands": {
+					"computer_command": [],
+					"size": 0
+				}
+			}`},
+		},
+	}
+
+	got, err := fetchClassicNestedSize(context.Background(), client, "/JSSResource/computercommands", "computer_commands")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "0" {
+		t.Errorf("got %q, want %q", got, "0")
+	}
+}
+
+func TestFetchClassicNestedSize_MissingOuter(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/JSSResource/computercommands": {200, `{"other_key": {}}`},
+		},
+	}
+
+	got, err := fetchClassicNestedSize(context.Background(), client, "/JSSResource/computercommands", "computer_commands")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "0" {
+		t.Errorf("got %q, want %q", got, "0")
+	}
+}
+
+func TestPrintOverviewTable_NotificationsNone(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Notifications",
+			Items: []overviewItem{
+				{"Active Alerts", "None", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	output := buf.String()
+
+	// "None" should render green (same as "ok")
+	if !strings.Contains(output, "\033[32m") {
+		t.Error("missing green color code for 'None' alerts")
+	}
+}
+
+func TestPrintOverviewTable_NotificationsActive(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Notifications",
+			Items: []overviewItem{
+				{"Active Alerts", "4 active", "red"},
+				{"Alert Types", "PUSH_CERT_EXPIRED, EXCEEDED_LICENSE_COUNT", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	output := buf.String()
+
+	if !strings.Contains(output, "\033[31m") {
+		t.Error("missing red color code for active alerts")
+	}
+	if !strings.Contains(output, "PUSH_CERT_EXPIRED") {
+		t.Error("missing alert type detail")
+	}
+}
+
+func TestFormatCount(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{"float64 zero", float64(0), "0"},
+		{"float64 small", float64(42), "42"},
+		{"float64 large", float64(1234567), "1,234,567"},
+		{"int", int(99), "99"},
+		{"int64", int64(5000), "5,000"},
+		{"non-numeric string", "hello", "hello"},
+		{"nil", nil, "<nil>"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatCount(tt.input)
+			if got != tt.want {
+				t.Errorf("formatCount(%v) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatEpochExpiration(t *testing.T) {
+	now := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name      string
+		epoch     float64
+		wantColor string
+		wantWord  string
+	}{
+		{"expired", float64(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).Unix()), "red", "expired"},
+		{"expiring soon", float64(time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC).Unix()), "red", "days"},
+		{"expiring mid", float64(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC).Unix()), "yellow", "days"},
+		{"far future", float64(time.Date(2028, 1, 1, 0, 0, 0, 0, time.UTC).Unix()), "", "Jan 01, 2028"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			formatted, color := formatEpochExpiration(tt.epoch, now)
+			if color != tt.wantColor {
+				t.Errorf("color = %q, want %q", color, tt.wantColor)
+			}
+			if !strings.Contains(formatted, tt.wantWord) {
+				t.Errorf("formatted = %q, want to contain %q", formatted, tt.wantWord)
+			}
+		})
+	}
+}
+
+func TestRunOverview_FullMock(t *testing.T) {
+	mock := buildFullOverviewMock()
+
+	// runOverview uses the package-level serverURL for health check + display
+	oldURL := serverURL
+	serverURL = "https://test.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	cliCtx := &registry.CLIContext{Client: mock}
+	sections, err := runOverview(context.Background(), cliCtx)
+	if err != nil {
+		t.Fatalf("runOverview error: %v", err)
+	}
+
+	if len(sections) == 0 {
+		t.Fatal("expected non-empty sections")
+		return
+	}
+
+	// Flatten to a map for easy assertions
+	values := make(map[string]string)
+	for _, sec := range sections {
+		for _, item := range sec.Items {
+			if item.Resource != "" {
+				values[item.Resource] = item.Value
+			}
+		}
+	}
+
+	// Spot-check key values (matches new section layout)
+	checks := map[string]string{
+		"Active Alerts":          "None",
+		"Server URL":             "https://test.jamfcloud.com",
+		"Jamf Pro Version":       "11.0.0",
+		"Managed Computers":      "500",
+		"Unmanaged Computers":    "10",
+		"Managed Devices":        "200",
+		"Check-In Frequency":     "15 min",
+		"ADE Instances":          "1",
+		"Computer Prestages":     "2",
+		"VPP Locations":          "2",
+		"Computer Smart Groups":  "5",
+		"Computer Static Groups": "3",
+		"Mobile Static Groups":   "2",
+		"App Installers":         "7",
+		"Sites":                  "2",
+		"Buildings":              "3",
+		"Scripts":                "25",
+		"Policies":               "1",
+		"Packages":               "3",
+		"Static User Groups":     "3",
+	}
+
+	for resource, want := range checks {
+		got, ok := values[resource]
+		if !ok {
+			t.Errorf("missing resource %q in overview output", resource)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s = %q, want %q", resource, got, want)
+		}
+	}
+}
+
+func TestRunOverview_AllAPIErrors(t *testing.T) {
+	// Empty mock → every API call fails
+	mock := &overviewMockClient{responses: map[string]overviewMockResponse{}}
+
+	oldURL := serverURL
+	serverURL = "http://127.0.0.1:1" // health check will fail too
+	defer func() { serverURL = oldURL }()
+
+	cliCtx := &registry.CLIContext{Client: mock}
+	sections, err := runOverview(context.Background(), cliCtx)
+	if err != nil {
+		t.Fatalf("runOverview should not return error (errors become N/A), got: %v", err)
+	}
+
+	// Everything should be "N/A" or a known fallback
+	for _, sec := range sections {
+		for _, item := range sec.Items {
+			if item.Resource == "Server URL" {
+				continue // always populated from serverURL var
+			}
+			if item.Resource == "" && item.Value == "" {
+				continue // separator
+			}
+			// Should not panic or have empty values — "N/A" is the expected fallback
+		}
+	}
+
+	if len(sections) == 0 {
+		t.Fatal("expected sections even when all API calls fail")
+		return
+	}
+}
+
+func TestFetchPaginatedCount_ExistingQueryParams(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v2/mdm/commands": {200, `{"totalCount":7,"results":[]}`},
+		},
+	}
+
+	got, err := fetchPaginatedCount(context.Background(), client, "/v2/mdm/commands?filter=status%3D%3DError")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "7" {
+		t.Errorf("got %q, want %q", got, "7")
+	}
+}
+
+// cdpFilePath is the JCDS files request the count walk sends for one page.
+// Built off ProMaxPageSize rather than a literal so these tests keep covering
+// the multi-page path if the endpoint's ceiling ever moves — a literal 100 here
+// is what silently stopped page 1 being reached when the walk went up to 2000.
+func cdpFilePath(page int) string {
+	return fmt.Sprintf("/v1/cloud-distribution-point/files?page=%d&page-size=%d", page, ProMaxPageSize)
+}
+
+// cdpFilePage renders n JCDS file rows starting at offset.
+func cdpFilePage(offset, n int) string {
+	rows := make([]string, n)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"fileName":"file%d.pkg"}`, offset+i)
+	}
+	return strings.Join(rows, ",")
+}
+
+func TestFetchCDPFileCount_MultiPage(t *testing.T) {
+	// One full page plus a partial one. totalCount is deliberately wrong here,
+	// as it is on the wire — the walk counts rows rather than trusting it.
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			cdpFilePath(0): {200, `{"totalCount":0,"results":[` + cdpFilePage(0, ProMaxPageSize) + `]}`},
+			cdpFilePath(1): {200, `{"totalCount":0,"results":[` + cdpFilePage(ProMaxPageSize, 50) + `]}`},
+		},
+	}
+
+	got, err := fetchCDPFileCount(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := formatCount(float64(ProMaxPageSize + 50)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFetchCDPFileCount_ExactlyOnePage(t *testing.T) {
+	// Exactly one full page — must fetch page 1 to confirm it's empty.
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			cdpFilePath(0): {200, `{"totalCount":0,"results":[` + cdpFilePage(0, ProMaxPageSize) + `]}`},
+			cdpFilePath(1): {200, `{"totalCount":0,"results":[]}`},
+		},
+	}
+
+	got, err := fetchCDPFileCount(context.Background(), client)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := formatCount(float64(ProMaxPageSize)); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestFetchCDPFileCount_BadResponse(t *testing.T) {
+	client := &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			cdpFilePath(0): {200, `{"error":"unexpected"}`},
+		},
+	}
+
+	_, err := fetchCDPFileCount(context.Background(), client)
+	if err == nil {
+		t.Fatal("expected error for missing results array, got nil")
+		return
+	}
+}
+
+func TestOverviewToRows_WithColorHints(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Security",
+			Items: []overviewItem{
+				{"CA Expires", "Mar 01, 2026 (expired)", "red"},
+				{"Health", "ok", ""},
+			},
+		},
+	}
+
+	rows := overviewToRows(sections)
+	if len(rows) != 2 {
+		t.Fatalf("got %d rows, want 2", len(rows))
+	}
+
+	if rows[0]["status"] != "red" {
+		t.Errorf("row 0 status = %v, want %q", rows[0]["status"], "red")
+	}
+	if _, hasStatus := rows[1]["status"]; hasStatus {
+		t.Error("row 1 should not have status key")
+	}
+}
+
+func TestPrintOverviewTable_BlankSeparator(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Test",
+			Items: []overviewItem{
+				{"Before", "value1", ""},
+				{}, // blank separator
+				{"After", "value2", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, false)
+	output := buf.String()
+
+	if !strings.Contains(output, "Before") || !strings.Contains(output, "After") {
+		t.Error("missing items around separator")
+	}
+}
+
+func TestPrintOverviewTable_ACCEPTEDStatus(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Info",
+			Items: []overviewItem{
+				{"SLASA", "ACCEPTED", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	if !strings.Contains(buf.String(), "\033[32m") {
+		t.Error("ACCEPTED should render green")
+	}
+}
+
+func TestFormatExpirationDate_InvalidDate(t *testing.T) {
+	formatted, color := formatExpirationDate("not-a-date", time.Now())
+	if formatted != "not-a-date" {
+		t.Errorf("formatted = %q, want passthrough", formatted)
+	}
+	if color != "" {
+		t.Errorf("color = %q, want empty for invalid date", color)
+	}
+}
+
+func TestPrintOverviewTable_DEPSyncSuccessful(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Enrollment",
+			Items: []overviewItem{
+				{"ADE Sync Status", "SUCCESSFUL (Feb 16 02:31 UTC)", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	output := buf.String()
+
+	// SUCCESSFUL should render green
+	if !strings.Contains(output, "\033[32m") {
+		t.Error("missing green color code for SUCCESSFUL sync")
+	}
+}
+
+func TestRunOverview_AdminSSO(t *testing.T) {
+	tests := []struct {
+		name    string
+		ssoJSON string
+		wantVal string
+	}{
+		{
+			"OIDC enabled",
+			`{"ssoEnabled":true,"configurationType":"OIDC","oidcSettings":{},"samlSettings":{},"ssoBypassAllowed":false,"ssoForMacOsSelfServiceEnabled":false,"groupEnrollmentAccessEnabled":false,"ssoForEnrollmentEnabled":false,"enrollmentSsoForAccountDrivenEnrollmentEnabled":false}`,
+			"enabled (OIDC)",
+		},
+		{
+			"OIDC with SAML",
+			`{"ssoEnabled":true,"configurationType":"OIDC_WITH_SAML","oidcSettings":{},"samlSettings":{},"ssoBypassAllowed":false,"ssoForMacOsSelfServiceEnabled":false,"groupEnrollmentAccessEnabled":false,"ssoForEnrollmentEnabled":false,"enrollmentSsoForAccountDrivenEnrollmentEnabled":false}`,
+			"enabled (OIDC + SAML)",
+		},
+		{
+			"SAML only is disabled",
+			`{"ssoEnabled":true,"configurationType":"SAML","oidcSettings":{},"samlSettings":{},"ssoBypassAllowed":false,"ssoForMacOsSelfServiceEnabled":false,"groupEnrollmentAccessEnabled":false,"ssoForEnrollmentEnabled":false,"enrollmentSsoForAccountDrivenEnrollmentEnabled":false}`,
+			"disabled",
+		},
+		{
+			"SSO disabled entirely",
+			`{"ssoEnabled":false,"configurationType":"SAML","oidcSettings":{},"samlSettings":{},"ssoBypassAllowed":false,"ssoForMacOsSelfServiceEnabled":false,"groupEnrollmentAccessEnabled":false,"ssoForEnrollmentEnabled":false,"enrollmentSsoForAccountDrivenEnrollmentEnabled":false}`,
+			"disabled",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := buildFullOverviewMock()
+			mock.responses["/v3/sso"] = overviewMockResponse{200, tt.ssoJSON}
+
+			oldURL := serverURL
+			serverURL = "https://test.jamfcloud.com"
+			defer func() { serverURL = oldURL }()
+
+			cliCtx := &registry.CLIContext{Client: mock}
+			sections, err := runOverview(context.Background(), cliCtx)
+			if err != nil {
+				t.Fatalf("runOverview error: %v", err)
+			}
+
+			// Find Admin SSO in Features section
+			for _, sec := range sections {
+				if sec.Name != "Features" {
+					continue
+				}
+				for _, item := range sec.Items {
+					if item.Resource == "Admin SSO" {
+						if item.Value != tt.wantVal {
+							t.Errorf("Admin SSO = %q, want %q", item.Value, tt.wantVal)
+						}
+						return
+					}
+				}
+			}
+			// disabled values don't appear in Features
+			if tt.wantVal != "disabled" {
+				t.Errorf("Admin SSO not found in Features, want %q", tt.wantVal)
+			}
+		})
+	}
+}
+
+func TestRunOverview_APNsCertStatus(t *testing.T) {
+	tests := []struct {
+		name          string
+		notifications string
+		wantVal       string
+		wantColor     string
+	}{
+		{
+			"no alerts",
+			`[]`,
+			"OK",
+			"",
+		},
+		{
+			"push cert expired",
+			`[{"type":"PUSH_CERT_EXPIRED"}]`,
+			"Expired",
+			"red",
+		},
+		{
+			"push cert expiring",
+			`[{"type":"PUSH_CERT_WILL_EXPIRE"}]`,
+			"Expiring soon",
+			"yellow",
+		},
+		{
+			"unrelated alert only",
+			`[{"type":"PATCH_UPDATE"}]`,
+			"OK",
+			"",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := buildFullOverviewMock()
+			mock.responses["/v1/notifications"] = overviewMockResponse{200, tt.notifications}
+
+			oldURL := serverURL
+			serverURL = "https://test.jamfcloud.com"
+			defer func() { serverURL = oldURL }()
+
+			cliCtx := &registry.CLIContext{Client: mock}
+			sections, err := runOverview(context.Background(), cliCtx)
+			if err != nil {
+				t.Fatalf("runOverview error: %v", err)
+			}
+
+			for _, sec := range sections {
+				for _, item := range sec.Items {
+					if item.Resource == "APNs Certificate" {
+						if item.Value != tt.wantVal {
+							t.Errorf("APNs Certificate = %q, want %q", item.Value, tt.wantVal)
+						}
+						if item.ColorHint != tt.wantColor {
+							t.Errorf("APNs color = %q, want %q", item.ColorHint, tt.wantColor)
+						}
+						return
+					}
+				}
+			}
+			t.Error("APNs Certificate not found in output")
+		})
+	}
+}
+
+func TestPrintOverviewTable_EnabledWithDetail(t *testing.T) {
+	sections := []overviewSection{
+		{
+			Name: "Features",
+			Items: []overviewItem{
+				{"Admin SSO", "enabled (OIDC)", ""},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	printOverviewTable(&buf, sections, true)
+	if !strings.Contains(buf.String(), "\033[32m") {
+		t.Error("'enabled (OIDC)' should render green")
+	}
+}
+
+// buildFullOverviewMock returns a mock with all API paths populated for a baseline overview.
+func TestBuildInstanceItems_DirectAuth(t *testing.T) {
+	oldURL := serverURL
+	serverURL = "https://acme.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	get := func(key string) string {
+		m := map[string]string{
+			"pro_url": "https://acme.jamfcloud.com",
+			"version": "11.5.0",
+		}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	items := buildInstanceItems(get, item)
+
+	// Should have Server URL and Version, no Gateway URL
+	found := make(map[string]string)
+	for _, it := range items {
+		found[it.Resource] = it.Value
+	}
+	if found["Server URL"] != "https://acme.jamfcloud.com" {
+		t.Errorf("Server URL = %q, want %q", found["Server URL"], "https://acme.jamfcloud.com")
+	}
+	if found["Jamf Pro Version"] != "11.5.0" {
+		t.Errorf("Jamf Pro Version = %q, want %q", found["Jamf Pro Version"], "11.5.0")
+	}
+	if _, ok := found["Gateway URL"]; ok {
+		t.Error("Gateway URL should not be present for direct auth")
+	}
+}
+
+func TestBuildInstanceItems_DirectAuth_TrailingSlash(t *testing.T) {
+	oldURL := serverURL
+	serverURL = "https://acme.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	get := func(key string) string {
+		m := map[string]string{
+			"pro_url": "https://acme.jamfcloud.com/", // API returns trailing slash
+			"version": "11.5.0",
+		}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	items := buildInstanceItems(get, item)
+
+	found := make(map[string]string)
+	for _, it := range items {
+		found[it.Resource] = it.Value
+	}
+	if _, ok := found["Gateway URL"]; ok {
+		t.Error("Gateway URL should not be present when URLs differ only by trailing slash")
+	}
+}
+
+func TestBuildInstanceItems_PlatformAuth(t *testing.T) {
+	oldURL := serverURL
+	serverURL = "https://eu.api.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	get := func(key string) string {
+		m := map[string]string{
+			"pro_url": "https://acme.jamfcloud.com",
+			"version": "11.5.0",
+		}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	items := buildInstanceItems(get, item)
+
+	found := make(map[string]string)
+	for _, it := range items {
+		found[it.Resource] = it.Value
+	}
+	if found["Server URL"] != "https://acme.jamfcloud.com" {
+		t.Errorf("Server URL = %q, want %q", found["Server URL"], "https://acme.jamfcloud.com")
+	}
+	if found["Gateway URL"] != "https://eu.api.jamfcloud.com" {
+		t.Errorf("Gateway URL = %q, want %q", found["Gateway URL"], "https://eu.api.jamfcloud.com")
+	}
+}
+
+func TestBuildInstanceItems_ProURLFetchFailed(t *testing.T) {
+	oldURL := serverURL
+	serverURL = "https://eu.api.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	get := func(key string) string {
+		m := map[string]string{
+			"pro_url": "N/A", // API call failed
+			"version": "11.5.0",
+		}
+		if v, ok := m[key]; ok {
+			return v
+		}
+		return "N/A"
+	}
+	item := func(resource, value string) overviewItem {
+		return overviewItem{resource, value, ""}
+	}
+
+	items := buildInstanceItems(get, item)
+
+	found := make(map[string]string)
+	for _, it := range items {
+		found[it.Resource] = it.Value
+	}
+	// Falls back to serverURL when pro_url fetch fails
+	if found["Server URL"] != "https://eu.api.jamfcloud.com" {
+		t.Errorf("Server URL = %q, want %q (fallback to serverURL)", found["Server URL"], "https://eu.api.jamfcloud.com")
+	}
+	if _, ok := found["Gateway URL"]; ok {
+		t.Error("Gateway URL should not be present when pro_url fallback matches serverURL")
+	}
+}
+
+func TestRunOverview_PlatformAuth_ServerURL(t *testing.T) {
+	mock := buildFullOverviewMock()
+	// Override the pro server URL to differ from serverURL (simulates platform auth)
+	mock.responses["/v1/jamf-pro-server-url"] = overviewMockResponse{200, `{"url":"https://acme.jamfcloud.com"}`}
+
+	oldURL := serverURL
+	serverURL = "https://eu.api.jamfcloud.com"
+	defer func() { serverURL = oldURL }()
+
+	cliCtx := &registry.CLIContext{Client: mock}
+	sections, err := runOverview(context.Background(), cliCtx)
+	if err != nil {
+		t.Fatalf("runOverview error: %v", err)
+	}
+
+	values := make(map[string]string)
+	for _, sec := range sections {
+		for _, item := range sec.Items {
+			if item.Resource != "" {
+				values[item.Resource] = item.Value
+			}
+		}
+	}
+
+	if values["Server URL"] != "https://acme.jamfcloud.com" {
+		t.Errorf("Server URL = %q, want %q", values["Server URL"], "https://acme.jamfcloud.com")
+	}
+	if values["Gateway URL"] != "https://eu.api.jamfcloud.com" {
+		t.Errorf("Gateway URL = %q, want %q", values["Gateway URL"], "https://eu.api.jamfcloud.com")
+	}
+}
+
+func buildFullOverviewMock() *overviewMockClient {
+	return &overviewMockClient{
+		responses: map[string]overviewMockResponse{
+			"/v1/jamf-pro-version":                           {200, `{"version":"11.0.0"}`},
+			"/v1/jamf-pro-server-url":                        {200, `{"url":"https://test.jamfcloud.com"}`},
+			"/v1/slasa":                                      {200, `{"slasaAcceptanceStatus":"ACCEPTED"}`},
+			"/v2/jamf-pro-information":                       {200, `{"vppTokenEnabled":true,"depAccountEnabled":false,"cloudDeploymentsEnabled":true,"patchEnabled":true,"ssoSamlEnabled":false,"smtpEnabled":true}`},
+			"/v1/csa/token":                                  {404, `{}`},
+			"/v3/check-in":                                   {200, `{"checkInFrequency":15,"createHooks":false,"createStartupScript":true,"enableLocalConfigurationProfiles":false}`},
+			"/v4/enrollment":                                 {200, `{"macOsEnterpriseEnrollmentEnabled":true,"iosEnterpriseEnrollmentEnabled":true,"iosPersonalEnrollmentEnabled":false,"accountDrivenUserEnrollmentEnabled":false,"accountDrivenDeviceMacosEnrollmentEnabled":true}`},
+			"/v1/self-service/settings":                      {200, `{"installSettings":{"installAutomatically":true},"loginSettings":{"userLoginLevel":"Required"},"configurationSettings":{"notificationsEnabled":false}}`},
+			"/v2/local-admin-password/settings":              {200, `{"autoDeployEnabled":true,"autoRotateEnabled":false}`},
+			"/v1/device-communication-settings":              {200, `{"autoRenewComputerMdmProfileWhenDeviceIdentityCertExpiring":true,"autoRenewMobileDeviceMdmProfileWhenDeviceIdentityCertExpiring":false,"mdmProfileComputerExpirationLimitInDays":180,"mdmProfileMobileDeviceExpirationLimitInDays":90}`},
+			"/v1/pki/certificate-authority/active":           {200, `{"notAfter":1893456000}`},
+			"/v1/inventory-information":                      {200, `{"managedComputers":500,"unmanagedComputers":10,"managedDevices":200,"unmanagedDevices":5}`},
+			"/v1/sites":                                      {200, `[{"id":"1"},{"id":"2"}]`},
+			"/v1/buildings":                                  {200, `{"totalCount":3,"results":[]}`},
+			"/v1/departments":                                {200, `{"totalCount":5,"results":[]}`},
+			"/v1/categories":                                 {200, `{"totalCount":12,"results":[]}`},
+			"/v3/computer-groups/smart-groups":               {200, `{"totalCount":5,"results":[]}`},
+			"/v3/computer-groups/static-groups":              {200, `{"totalCount":3,"results":[]}`},
+			"/v2/mobile-device-groups/smart-groups":          {200, `{"totalCount":8,"results":[]}`},
+			"/v2/mobile-device-groups/static-groups":         {200, `{"totalCount":2,"results":[]}`},
+			"/v1/scripts":                                    {200, `{"totalCount":25,"results":[]}`},
+			"/v1/ebooks":                                     {200, `{"totalCount":0,"results":[]}`},
+			"/v1/cloud-distribution-point/files":             {200, `{"totalCount":0,"results":[]}`},
+			"/v1/app-installers/titles":                      {200, `{"totalCount":7,"results":[]}`},
+			"/v1/device-enrollments":                         {200, `{"totalCount":1,"results":[{"id":"42","name":"Acme Corp","tokenExpirationDate":"2027-06-15"}]}`},
+			"/v1/device-enrollments/42/syncs/latest":         {200, `{"syncState":"SUCCESSFUL","timestamp":"2026-03-14T10:30:00.000"}`},
+			"/v3/computer-prestages":                         {200, `{"totalCount":2,"results":[]}`},
+			"/v3/mobile-device-prestages":                    {200, `{"totalCount":1,"results":[]}`},
+			"/v1/volume-purchasing-locations":                {200, `{"totalCount":2,"results":[{"name":"Acme VPP","tokenExpiration":"2027-08-01T12:00:00.000Z"},{"name":"Schools VPP","tokenExpiration":"2026-05-15T09:30:00.000Z"}]}`},
+			"/v3/sso":                                        {200, `{"ssoEnabled":true,"configurationType":"OIDC","oidcSettings":{},"samlSettings":{},"ssoBypassAllowed":false,"ssoForMacOsSelfServiceEnabled":false,"groupEnrollmentAccessEnabled":false,"ssoForEnrollmentEnabled":false,"enrollmentSsoForAccountDrivenEnrollmentEnabled":false}`},
+			"/v1/static-user-groups":                         {200, `[{"id":"1"},{"id":"2"},{"id":"3"}]`},
+			"/v1/notifications":                              {200, `[]`},
+			"/JSSResource/policies":                          {200, `{"policies":[{"id":1}]}`},
+			"/JSSResource/osxconfigurationprofiles":          {200, `{"os_x_configuration_profiles":[{"id":1},{"id":2}]}`},
+			"/JSSResource/mobiledeviceconfigurationprofiles": {200, `{"configuration_profiles":[]}`},
+			"/JSSResource/packages":                          {200, `{"packages":[{"id":1},{"id":2},{"id":3}]}`},
+			"/v3/patch-software-title-configurations":        {200, `[{"id":"1"}]`},
+			"/JSSResource/webhooks":                          {200, `{"webhooks":[]}`},
+			"/ldap/servers":                                  {200, `[{"id":"1"}]`},
+		},
+	}
+}
