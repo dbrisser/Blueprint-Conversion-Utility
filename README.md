@@ -1,12 +1,10 @@
 # 🧭 Blueprint Conversion Utility
 
-**Version 3.0.4**
-
 > Convert Jamf Pro configuration profiles into Jamf Blueprints with scope-aware migration, payload compatibility planning, deployment review, and verified source-profile unscoping.
 
 Blueprint Conversion Utility is a native macOS application for converting Jamf Pro configuration profiles into Jamf Blueprints, reviewing their scope and payload compatibility, deploying the resulting Blueprint to Platform device groups, and optionally removing scope from the original Jamf Pro profile after a successful migration.
 
-Version 3.0.4 brings together the connection-state and profile-parser fixes from earlier releases with a Platform-only API architecture, Keychain-backed credentials, adaptive payload conversion planning, managed `jamf-cli` diagnostics, deployment review, verified source-profile unscoping, Unified Logging, and complete `.app` / `.pkg` / `.dmg` build support.
+The utility provides a Platform-only API architecture, Keychain-backed credentials, adaptive payload conversion planning, managed `jamf-cli` diagnostics, deployment review, verified source-profile unscoping, Apple Unified Logging, and complete `.app` / `.pkg` / `.dmg` build support.
 
 ---
 
@@ -24,12 +22,13 @@ Blueprint Conversion Utility can:
 - ❓ Flag unknown payloads as unverified rather than submitting them blindly.
 - 🏗️ Create Jamf Blueprints.
 - 🚀 Deploy Blueprints to Platform device groups.
-- 🔄 Redistribute profiles to original and newly selected groups.
+- 🔄 Redistribute converted profiles to original and newly selected groups.
 - 🧯 Safely remove scope from source configuration profiles.
 - ✅ Verify source-profile unscoping with API read-back.
 - 🔐 Store Platform credentials in macOS Keychain.
-- 🖥️ Diagnose `jamf-cli` from inside the application.
+- 🤖 Integrate with and diagnose `jamf-cli`.
 - 📜 Write operational events to Apple Unified Logging.
+- 🪵 View, filter, copy, and export application logs.
 - 📦 Build `.app`, `.pkg`, and `.dmg` distribution artifacts.
 
 ---
@@ -100,13 +99,13 @@ com.apple.vpn.managed
 
 Filtered payloads are **not silently discarded**.
 
-Converter warnings remain available in the conversion plan so the operator can see exactly which payloads were excluded.
+Converter warnings remain available in the conversion plan so the operator can see which payloads were excluded.
 
 ---
 
 # 🌐 Platform-Only API Architecture
 
-Version 3.0.4 uses a unified Jamf Platform API architecture.
+Blueprint Conversion Utility uses a unified Jamf Platform API architecture.
 
 All application network operations use:
 
@@ -129,22 +128,11 @@ These resources are used for:
 - Scope updates
 - Source-profile unscoping
 
-Blueprint device groups, Blueprint creation, and Blueprint deployment continue through native Platform API resources.
+Blueprint device groups, Blueprint creation, and Blueprint deployment use native Platform API resources.
 
-### 🧹 Removed Legacy Connection Configuration
+The application does not require a separate Jamf Pro URL, client ID, client secret, token cache, API connection test, or Jamf Pro Connections tab.
 
-The previous independent Jamf Pro connection configuration has been removed.
-
-There is no longer a separate:
-
-- Jamf Pro URL
-- Client ID
-- Client secret
-- Token cache
-- API connection test
-- Jamf Pro Connections tab
-
-Existing Platform secrets are migrated from the previous Keychain payload when available.
+Existing Platform secrets can be migrated from a previous Keychain payload when available.
 
 ---
 
@@ -159,11 +147,11 @@ The application is designed not to expose client secrets or access tokens in:
 - Unified Logging
 - User-facing log exports
 
-When credentials must be supplied to a supported CLI subprocess, they are supplied through the subprocess environment rather than command-line arguments.
+When credentials must be supplied to a supported CLI subprocess, they are provided through the subprocess environment rather than command-line arguments.
 
 ---
 
-# 🔀 Hybrid Native API + `jamf-cli`
+# 🔀 Native API + `jamf-cli`
 
 Blueprint Conversion Utility supports native Platform API operations alongside compatible `jamf-cli` operations.
 
@@ -171,7 +159,7 @@ Native API operations remain authoritative where structured profile XML, source-
 
 The application validates `jamf-cli` directly using `Process` and can inspect the executable's supported commands before attempting an operation.
 
-Current `jamf-cli` releases that do not expose the required Blueprint commands are **not** invoked for Blueprint creation.
+`jamf-cli` releases that do not expose the required Blueprint commands are **not** invoked for Blueprint creation.
 
 In that situation:
 
@@ -181,21 +169,21 @@ No secret or token is placed in `jamf-cli` process arguments.
 
 ---
 
-## 🧵 Swift 6 CLI Process Safety
+## 🧵 Swift Concurrency & CLI Process Safety
 
-Version 3.0.4 uses a dedicated `Sendable` command-result type.
+The CLI implementation uses a dedicated `Sendable` command-result type.
 
-Subprocess execution occurs within the `JamfCLIService` actor, avoiding concurrently executed local continuation callbacks that caused Swift 6 sendability diagnostics in previous implementations.
+Subprocess execution occurs within the `JamfCLIService` actor, avoiding unsafe concurrently executed local continuation callbacks.
 
-Unified-log messages emitted by `JamfCLIService` use a single `OSLogMessage` interpolation rather than attempting to concatenate multiple `OSLogMessage` values.
+Unified-log messages emitted by `JamfCLIService` use single `OSLogMessage` interpolations.
 
 ---
 
-# 🤖 Managed `jamf-cli` (Thanks @Neil Martin!)
+# 🤖 Managed `jamf-cli`
 
 The application can maintain a validated `jamf-cli` executable within its application context.
 
-The managed CLI workflow includes:
+The managed CLI workflow can:
 
 1. 🔎 Retrieve official Jamf `jamf-cli` release metadata.
 2. 🖥️ Select an appropriate macOS Apple Silicon or universal asset.
@@ -206,7 +194,7 @@ The managed CLI workflow includes:
 jamf-cli --version
 ```
 
-5. 🔍 Inspect:
+5. 🔍 Inspect available capabilities with:
 
 ```bash
 jamf-cli --help
@@ -289,8 +277,6 @@ The profile parser preserves the complete configuration-profile information requ
 - Exclusions
 - Individual assignments
 
-Version 3.0.4 restores the complete `ProfileDetailParser` implementation after an earlier source truncation removed closing method/class declarations and XML delegate callbacks from `XMLParsers.swift`.
-
 Nested payload dictionaries are preserved while maintaining the complete description, payload, and scope parsing lifecycle.
 
 ---
@@ -347,7 +333,7 @@ The Blueprint is scoped to:
 1. The automatically matched original Platform group.
 2. The newly selected Platform group.
 
-The application then:
+The application then follows the migration sequence:
 
 ```text
 🏗️ Create Blueprint
@@ -441,12 +427,12 @@ The destructive migration sequence is deliberately ordered:
 
 ---
 
-# 📜 Unified Logging
+# 📜 Apple Unified Logging
 
 Operational events are written to Apple Unified Logging using the subsystem:
 
 ```text
-com.jarredwheeler.blueprintcreator
+com.jawheelr.blueprintcreator
 ```
 
 This provides persistent, system-integrated diagnostics without requiring a separate application log file.
@@ -454,20 +440,26 @@ This provides persistent, system-integrated diagnostics without requiring a sepa
 ### 🔍 Historical Logs
 
 ```bash
-log show --predicate 'subsystem == "com.jarredwheeler.blueprintcreator"'
+log show --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
 ```
 
 ### 📡 Live Logs
 
 ```bash
-log stream --predicate 'subsystem == "com.jarredwheeler.blueprintcreator"'
+log stream --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
+```
+
+You can also specify a time range when investigating recent activity:
+
+```bash
+log show --last 1h --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
 ```
 
 ---
 
 # 🪵 View Logs
 
-The application includes a dedicated **View Logs** window for inspecting Unified Logging events.
+The application includes a dedicated **View Logs** window for inspecting its Unified Logging events.
 
 The viewer provides:
 
@@ -477,7 +469,7 @@ The viewer provides:
 - 📋 Copy
 - 📤 Export
 
-This allows common troubleshooting information to be collected without requiring operators to manually construct `log` predicates.
+This allows common troubleshooting information to be collected without requiring operators to manually construct `log` command predicates.
 
 ---
 
@@ -505,11 +497,11 @@ Typical requirements include:
 - 🍎 macOS
 - 🌐 Network access to the Jamf Platform API
 - 🔑 Valid Jamf Platform OAuth client credentials
-- 🪪 Appropriate Platform API scopes/permissions
+- 🪪 Appropriate Platform API scopes and permissions
 - 📄 Access to configuration profiles being converted
 - 🏗️ Permission to create Blueprints
 - 🚀 Permission to deploy Blueprints
-- 🧯 Permission to update source profile scope when using unscoping workflows
+- 🧯 Permission to update source configuration-profile scope when using unscoping workflows
 - 🛠️ Xcode/Swift build tooling when building from source
 
 `jamf-cli` is optional for operations that have a supported native Platform API implementation.
@@ -520,7 +512,7 @@ Typical requirements include:
 
 The project includes application, package, and disk-image build support.
 
-## Build Without `sudo`
+## 🚀 Build Without `sudo`
 
 From the project root:
 
@@ -547,7 +539,7 @@ Exact output locations are determined by `build.sh`.
 
 # 🧪 API Tests
 
-The project includes both required API tests used to validate the supported Jamf Platform integration paths.
+The project includes required API tests used to validate the supported Jamf Platform integration paths.
 
 Tests should be run against an appropriate non-production or controlled Jamf environment when they perform operations capable of modifying server-side state.
 
@@ -640,7 +632,7 @@ A CLI diagnostic failure does not necessarily prevent native Platform API operat
 
 ## 🤷 `jamf-cli` Has No Blueprint Commands
 
-This can be expected with CLI releases whose exposed command set does not include the required Blueprint functionality.
+This can occur when a CLI release does not expose the Blueprint functionality required by the utility.
 
 The application inspects CLI capabilities before attempting Blueprint creation.
 
@@ -687,107 +679,52 @@ An update is not treated as successfully unscoped merely because the API returne
 
 ---
 
+## 🌐 Platform API Request Fails
+
+Verify:
+
+- The Platform API hostname is correct.
+- The configured OAuth credentials are valid.
+- The OAuth client has the required scopes.
+- The target resource is available to the current Platform workspace.
+- Network or proxy controls are not blocking the request.
+
+Review the application's Unified Logging output for the associated request and response information.
+
+---
+
 ## 📜 View Application Logs From Terminal
 
 Historical events:
 
 ```bash
-log show --predicate 'subsystem == "com.jarredwheeler.blueprintcreator"'
+log show --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
+```
+
+Recent events:
+
+```bash
+log show --last 1h --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
 ```
 
 Live events:
 
 ```bash
-log stream --predicate 'subsystem == "com.jarredwheeler.blueprintcreator"'
+log stream --predicate 'subsystem == "com.jawheelr.blueprintcreator"'
 ```
 
 ---
 
-# 🎉 What's Included in 3.0.4
-
-### 🌐 API & Authentication
-
-- Platform-only API architecture
-- Platform Pro Classic gateway profile operations
-- Platform OAuth client credentials
-- macOS Keychain credential storage
-- Existing Platform-secret migration
-
-### 🧩 Profile Conversion
-
-- Complete configuration-profile XML parsing
-- Nested payload preservation
-- Scope, limitation, and exclusion parsing
-- Individual-device scope detection
-- Adaptive compatibility planning
-- Disabled Blueprint payload filtering
-- Native-component-required detection
-- Unverified payload handling
-- Preservation of converter warnings
-
-### 👥 Groups & Deployment
-
-- Normalized-name Platform group matching
-- Device-family-aware Platform groups
-- Unknown-family group visibility
-- Blueprint creation
-- Blueprint deployment
-- Original-plus-new-group redistribution
-- New-group-only distribution
-- Phase-protected deployment actions
-
-### 🧯 Migration Safety
-
-- Source-profile unscoping
-- Platform gateway PUT/GET verification
-- Semantic empty-scope verification
-- Destructive-action acknowledgement
-- Deployment-before-unscoping sequencing
-
-### 🤖 `jamf-cli`
-
-- Managed CLI support
-- CLI release discovery
-- Version validation
-- Capability detection
-- Safe subprocess execution
-- Swift 6 `Sendable` result handling
-- Actor-isolated subprocess runner
-- Dedicated diagnostics tab
-
-### 🪵 Diagnostics
-
-- Apple Unified Logging
-- Dedicated application subsystem
-- In-app View Logs window
-- Time/category predicates
-- Copy, refresh, and export
-- Detailed `jamf-cli` diagnostics
-
-### 🍎 macOS & Distribution
-
-- Native macOS application
-- Hidden visible title text
-- Standard macOS window controls
-- Icon resources
-- `.app` build
-- `.pkg` build
-- `.dmg` build
-- Build without `sudo`
-- Required API tests
-
----
-
-# 📌 Version Information
+# 📌 Project Information
 
 | | |
 |---|---|
 | **Application** | Blueprint Conversion Utility |
-| **Version** | `3.0.4` |
 | **Platform** | macOS |
-| **Logging subsystem** | `com.jarredwheeler.blueprintcreator` |
 | **API architecture** | Jamf Platform API |
 | **Credential storage** | macOS Keychain |
+| **Logging subsystem** | `com.jawheelr.blueprintcreator` |
+| **CLI integration** | `jamf-cli` with native API fallback |
 | **Distribution** | `.app` / `.pkg` / `.dmg` |
 
 ---
@@ -809,8 +746,8 @@ Before approving a destructive migration, confirm:
 
 ---
 
-## 🧭 Blueprint Conversion Utility 3.0.4
+## 🧭 Blueprint Conversion Utility
 
-**Convert → Review → Deploy → Verify**
+### **Convert → Review → Deploy → Verify**
 
 Built for migrating Jamf configuration profiles to Jamf Blueprints while keeping the operator in control of scope, compatibility, deployment, and source-profile disposition.
