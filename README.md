@@ -1,4 +1,4 @@
-# 🧭 Blueprint Conversion Utility
+# 🗺️ Blueprint Conversion Utility
 
 > Convert Jamf Pro configuration profiles into Jamf Blueprints with scope-aware migration, payload compatibility planning, deployment review, and verified source-profile unscoping.
 
