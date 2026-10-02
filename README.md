@@ -29,7 +29,6 @@ Blueprint Conversion Utility can:
 - 🤖 Integrate with and diagnose `jamf-cli`.
 - 📜 Write operational events to Apple Unified Logging.
 - 🪵 View, filter, copy, and export application logs.
-- 📦 Build `.app`, `.pkg`, and `.dmg` distribution artifacts.
 
 ---
 
