@@ -1,0 +1,174 @@
+// Copyright 2026, Jamf Software LLC
+
+package commands
+
+import "github.com/spf13/cobra"
+
+// commandAliases maps Jamf Pro command names to their short aliases.
+// Applied to children of the "pro" command.
+var commandAliases = map[string][]string{
+	"computer-inventory":     {"computers", "comp"},
+	"mobile-devices":         {"md"},
+	"scripts":                {"scr"},
+	"buildings":              {"bld"},
+	"categories":             {"cat"},
+	"departments":            {"dept"},
+	"group-tools":            {"gt"},
+	"api-roles":              {"ar"},
+	"api-integrations":       {"ai"},
+	"device":                 {"dev"},
+	"blueprints":             {"bp"},
+	"compliance-benchmarks":  {"cb"},
+	"platform-devices":       {"pdev"},
+	"platform-device-groups": {"pdg"},
+	"ddm-reports":            {"ddm"},
+	// jamf-protect is now the canonical name (singleton detection). Restore the jp short alias.
+	// jamf-connects still needs an alias since JamfConnect.yaml has {id} paths (config-profiles)
+	// so it isn't detected as a singleton and retains the plural generated name.
+	"jamf-protect": {"jp"},
+
+	// computer-groups-smart-groups replaced smart-computer-groups in 11.28.0; keep the old name
+	// as an alias so existing scripts don't break.
+	"computer-groups-smart-groups": {"smart-computer-groups"},
+
+	// The sub-resource split gave `/v1/jcds/files` a command of its own, at 37
+	// characters. Its parent still answers to `jcds` — but only as a
+	// deprecatedNames alias, which expires — so the abbreviation everyone
+	// actually types needs to be a curated one on both halves.
+	"jamf-cloud-distribution-service":       {"jcds"},
+	"jamf-cloud-distribution-service-files": {"jcds-files"},
+}
+
+// rootAliases maps root-level command names to short aliases.
+var rootAliases = map[string][]string{
+	"config":    {"cfg"},
+	"dashboard": {"db"},
+	"security":  {"sec"},
+}
+
+// applyAliases appends Aliases to any subcommand that has a mapping.
+func applyAliases(parent *cobra.Command) {
+	for _, cmd := range parent.Commands() {
+		if aliases, ok := commandAliases[cmd.Name()]; ok {
+			cmd.Aliases = appendNewAliases(cmd.Aliases, aliases)
+		}
+	}
+}
+
+// appendNewAliases adds each alias the command does not already answer to.
+//
+// applyDeprecatedNames runs first and appends aliases of its own, so two tables
+// can name one alias — `jcds` did, from both. A duplicate resolves fine and
+// then prints twice in the `Aliases:` line of --help and twice in the
+// `commands -o json` catalog, which reads as a defect in the listing rather
+// than in a table. TestNoCommandAnswersToAnAliasTwice is the guard.
+func appendNewAliases(have, add []string) []string {
+	for _, a := range add {
+		if !slicesContains(have, a) {
+			have = append(have, a)
+		}
+	}
+	return have
+}
+
+// applyRootAliases applies aliases to root-level commands.
+func applyRootAliases(root *cobra.Command) {
+	for _, cmd := range root.Commands() {
+		if aliases, ok := rootAliases[cmd.Name()]; ok {
+			cmd.Aliases = appendNewAliases(cmd.Aliases, aliases)
+		}
+	}
+}
+
+// protectAliases maps Jamf Protect command names to their short aliases.
+var protectAliases = map[string][]string{
+	"removable-storage-control-sets": {"rscs"},
+	"unified-logging-filters":        {"ulf"},
+	"unified-logging-filter-sets":    {"ulfs"},
+	"exception-sets":                 {"es"},
+	"analytic-sets":                  {"as"},
+	"action-configs":                 {"ac"},
+	"custom-prevent-lists":           {"cpl"},
+	"api-clients":                    {"apic"},
+	"config-freeze":                  {"cf"},
+	"computers":                      {"comp"},
+	"data-forwarding":                {"df"},
+	"data-retention":                 {"dr"},
+	"audit-logs":                     {"al"},
+	"insights":                       {"ins"},
+}
+
+// applyProtectAliases appends aliases to protect subcommands.
+func applyProtectAliases(parent *cobra.Command) {
+	for _, cmd := range parent.Commands() {
+		if aliases, ok := protectAliases[cmd.Name()]; ok {
+			cmd.Aliases = append(cmd.Aliases, aliases...)
+		}
+	}
+}
+
+// schoolAliases maps Jamf School command names to their short aliases.
+var schoolAliases = map[string][]string{
+	"devices":       {"dev"},
+	"device-groups": {"dg"},
+	"classes":       {"cls"},
+	"locations":     {"loc"},
+	"dep-devices":   {"dep"},
+	"ibeacons":      {"ib"},
+	"blueprints":    {"bp"},
+	"ddm-reports":   {"ddm"},
+}
+
+// applySchoolAliases appends aliases to school subcommands.
+func applySchoolAliases(parent *cobra.Command) {
+	for _, cmd := range parent.Commands() {
+		if aliases, ok := schoolAliases[cmd.Name()]; ok {
+			cmd.Aliases = append(cmd.Aliases, aliases...)
+		}
+	}
+}
+
+// securityAliases maps Jamf Security Cloud command names to their short aliases.
+var securityAliases = map[string][]string{
+	"device-lifecycle": {"lifecycle", "dl"},
+
+	// "enrollment-activation-profiles" is the full name because the tag it
+	// derives from ("activation-profiles") is shared with UEM Connect's
+	// deploy-only resource. Nobody should have to type it.
+	"enrollment-activation-profiles": {"eap"},
+}
+
+// applySecurityAliases appends aliases to security subcommands.
+func applySecurityAliases(parent *cobra.Command) {
+	for _, cmd := range parent.Commands() {
+		if aliases, ok := securityAliases[cmd.Name()]; ok {
+			cmd.Aliases = append(cmd.Aliases, aliases...)
+		}
+	}
+}
+
+// platformAliases maps Jamf Platform command names to their short aliases.
+var platformAliases = map[string][]string{
+	"ai-policies": {"aip"},
+	"ai-tools":    {"ait"},
+
+	// Jamf Account. "lic" rather than "al" because the resource is renamed
+	// account-licenses only to keep it distinct from Jamf Pro's licensing
+	// surfaces; what an operator is after is licences.
+	"account-licenses":            {"lic"},
+	"deal-registrations":          {"deals"},
+	"distributor-configuration":   {"dcfg"},
+	"distributor-purchase-orders": {"dpo"},
+	"distributor-quotes":          {"dq"},
+	"sso-connections":             {"ssoc"},
+	"sso-domains":                 {"ssod"},
+}
+
+// applyPlatformAliases appends aliases to platform subcommands.
+func applyPlatformAliases(parent *cobra.Command) {
+	for _, cmd := range parent.Commands() {
+		if aliases, ok := platformAliases[cmd.Name()]; ok {
+			cmd.Aliases = append(cmd.Aliases, aliases...)
+		}
+	}
+}
