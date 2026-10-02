@@ -6,9 +6,7 @@ Blueprint Conversion Utility is a native macOS application for converting Jamf P
 
 The utility provides a Platform-only API architecture, Keychain-backed credentials, adaptive payload conversion planning, managed `jamf-cli` diagnostics, deployment review, verified source-profile unscoping, Apple Unified Logging, and complete `.app` / `.pkg` / `.dmg` build support.
 
-
-https://github.com/user-attachments/assets/8e29f049-b886-485f-bb04-c9b4063139c1
-
+<img width="640" height="380" alt="BCU" src="https://github.com/user-attachments/assets/3aba7912-e9f4-4cc2-a8c5-8a3a05588f75" />
 
 ---
 
