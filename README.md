@@ -169,7 +169,7 @@ No secret or token is placed in `jamf-cli` process arguments.
 
 ### 🙌 Kudos
 
-A special shout-out and thanks to **[@Neil Martin](https://github.com/Neil-Martin)** for his work around `jamf-cli` and for helping move the Jamf community forward with modern tooling and workflows. 👏
+A special shout-out and thanks to **[@Neil Martin](https://github.com/neilmartin83)** for his work on `jamf-cli` and for helping move the Jamf community forward with modern tooling and workflows. 👏
 
 ---
 
