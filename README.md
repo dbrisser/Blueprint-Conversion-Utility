@@ -513,35 +513,6 @@ Typical requirements include:
 
 ---
 
-# 🛠️ Building
-
-The project includes application, package, and disk-image build support.
-
-## 🚀 Build Without `sudo`
-
-From the project root:
-
-```bash
-xattr -dr com.apple.quarantine . && /bin/bash ./build.sh
-```
-
-This removes the quarantine extended attribute from the source tree and executes the build script without requiring `sudo`.
-
-> ⚠️ **Security note:** Review scripts before executing them when building code obtained from an untrusted source.
-
-The build workflow produces the applicable macOS distribution artifacts:
-
-```text
-📦 Build
- ├── 🧭 Blueprint Conversion Utility.app
- ├── 📦 .pkg
- └── 💿 .dmg
-```
-
-Exact output locations are determined by `build.sh`.
-
----
-
 # 🧪 API Tests
 
 The project includes required API tests used to validate the supported Jamf Platform integration paths.
